@@ -13,6 +13,7 @@ from natsort import natsorted
 from models.TransMorph_affine import CONFIGS as CONFIGS_TM
 import models.TransMorph_affine as TransMorph
 import torch.nn as nn
+import argparse
 
 def affine_aug(im, im_label=None, seed=10):
     # mode = 'bilinear' or 'nearest'
@@ -77,7 +78,7 @@ def affine_aug(im, im_label=None, seed=10):
 class Logger(object):
     def __init__(self, save_dir):
         self.terminal = sys.stdout
-        self.log = open(save_dir+"logfile.log", "a")
+        self.log = open(os.path.join(save_dir, "logfile.log"), "a")
 
     def write(self, message):
         self.terminal.write(message)
@@ -86,63 +87,79 @@ class Logger(object):
     def flush(self):
         pass
 
-def main():
-    batch_size = 1
-    atlas_dir = 'D:/DATA/IXI/atlas.pkl'
-    train_dir = 'D:/DATA/IXI/toy_train/'
-    val_dir = 'D:/DATA/IXI/toy/'
-    save_dir = 'TransMorphAffine_ncc/'
-    if not os.path.exists('experiments/'+save_dir):
-        os.makedirs('experiments/'+save_dir)
-    if not os.path.exists('logs/'+save_dir):
-        os.makedirs('logs/'+save_dir)
-    sys.stdout = Logger('logs/'+save_dir)
-    lr = 0.1 # learning rate
-    epoch_start = 0
-    max_epoch = 500 #max traning epoch
-    cont_training = False #if continue training
 
-    '''
-    Initialize model
-    '''
+def args_input():
+    parser = argparse.ArgumentParser(description='Affine TransMorph Affine')
+    parser.add_argument('--train_dir', type=str, default='train', help='path to train data')
+    parser.add_argument('--val_dir', type=str,  default='val', help='path to val data')
+    parser.add_argument('--save_dir', type=str,  default='transmorph_affine', help='Save folder')
+    parser.add_argument('--lr', type=float,  default=0.1, help='Learning Rate')
+    parser.add_argument('--batch_size', type=int,  default=1, help='Batch size')
+    parser.add_argument('--continue_train', action='store_true', help='Flag for continue training a model')
+    parser.add_argument('--num_epochs', type=int, default=500, help='Total number of epochs')
+    parser.add_argument('--epoch_start', type=int, default=0, help='Start epoch for training')
+    return parser.parse_args()
+
+def main():
+    args = args_input()
+
+    # atlas_dir = 'D:/DATA/IXI/atlas.pkl'
+    train_dir = args.train_dir
+    val_dir = args.val_dir
+    save_dir = args.save_dir
+    
+    model_dir = os.path.join('experiments', save_dir)
+    log_dir = os.path.join('logs', save_dir)
+    if not os.path.exists(model_dir):
+        os.makedirs(model_dir)
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
+    sys.stdout = Logger(log_dir)
+    
+    batch_size = args.batch_size
+    lr = args.lr
+    epoch_start = args.epoch_start
+    max_epoch = args.num_epochs
+    cont_training = args.continue_train
+
+
+    # Initialize model
+    # TODO: Pensar em como setar h, w, d
     H, W, D = 160, 192, 224
-    config = CONFIGS_TM['TransMorph']
+    config = CONFIGS_TM['TransMorph_Affine']
     config.img_size = (H, W, D)
     config.window_size = (H // 32, W // 32, D // 32)
-    config.out_chan = 3
-    config.embed_dim = 96
-    config.use_checkpoint = False
+    
     model = TransMorph.TransMorphAffine(config)
     model.cuda()
     affine_trans = TransMorph.AffineTransform()#AffineTransformer((H, W, D)).cuda()
-    '''
-    Initialize spatial transformation function
-    '''
+    
+    # Initialize spatial transformation function
     reg_model = utils.register_model(config.img_size, 'nearest')
     reg_model.cuda()
     reg_model_bilin = utils.register_model(config.img_size, 'bilinear')
     reg_model_bilin.cuda()
 
-    '''
-    If continue from previous training
-    '''
+    # If continue from previous training
+    # TODO: validar forma de save e load
     if cont_training:
-        epoch_start = 201
-        model_dir = 'experiments/'+save_dir
-        updated_lr = round(lr * np.power(1 - (epoch_start) / max_epoch,0.9),8)
+        if epoch_start == 0:
+            raise Exception('Set a model to load')
+        updated_lr = round(lr * np.power(1 - (epoch_start) / max_epoch, 0.9),8) # TODO: usar funcao
         best_model = torch.load(model_dir + natsorted(os.listdir(model_dir))[-1])['state_dict']
         print('Model: {} loaded!'.format(natsorted(os.listdir(model_dir))[-1]))
         model.load_state_dict(best_model)
     else:
         updated_lr = lr
 
-    '''
-    Initialize training
-    '''
+    # Initialize training
+    # TODO: verificar modficcao vit
     train_composed = transforms.Compose([trans.RandomFlip(0),
                                          trans.NumpyType((np.float32, np.float32)),
                                          ])
 
+    # TODO: criar orcascore clase
+    # TODO: ver bo de tipos
     val_composed = transforms.Compose([trans.Seg_norm(), #rearrange segmentation label to 1 to 46
                                        trans.NumpyType((np.float32, np.int16))])
     train_set = datasets.IXIBrainDataset(glob.glob(train_dir + '*.pkl'), atlas_dir, transforms=train_composed)
@@ -203,6 +220,7 @@ def main():
                 plt.savefig('reg_results{}'.format(idd))
                 plt.close()
                 idd += 1
+        # TODO: salvar
 
 
 def comput_fig(img):
@@ -217,7 +235,7 @@ def comput_fig(img):
 
 def adjust_learning_rate(optimizer, epoch, MAX_EPOCHES, INIT_LR, power=0.9):
     for param_group in optimizer.param_groups:
-        param_group['lr'] = round(INIT_LR * np.power( 1 - (epoch) / MAX_EPOCHES ,power),8)
+        param_group['lr'] = round(INIT_LR * np.power( 1 - (epoch) / MAX_EPOCHES , power), 8)
 
 def mk_grid_img(grid_step, line_thickness=1, grid_sz=(160, 192, 224)):
     grid_img = np.zeros(grid_sz)

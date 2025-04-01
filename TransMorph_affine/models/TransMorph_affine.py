@@ -950,4 +950,5 @@ class TransMorphAffine(nn.Module):
 
 CONFIGS = {
     'TransMorph': configs.get_3DTransMorph_config(),
+    'TransMorph_Affine': configs.get_3DTransMorph_Affine_config()
 }
