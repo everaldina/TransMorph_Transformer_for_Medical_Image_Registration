@@ -168,7 +168,7 @@ def main(config):
         netB_folder = config['netB_folder']
         
         # deve conter um train_data.csv e test.csv
-        split_path = f'{config['split_path']}/{phase}_data.csv'
+        split_path = f'{config["split_path"]}/{phase}_data.csv'
         
         if not os.path.exists(result_folder):
             os.makedirs(result_folder)
