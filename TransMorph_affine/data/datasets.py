@@ -80,3 +80,24 @@ class IXIBrainInferDataset(Dataset):
 
     def __len__(self):
         return len(self.paths)
+    
+class OrCaScoreDataSet(Dataset):
+    def __init__(self, data_path, transforms):
+        self.paths = data_path
+        self.transforms = transforms
+
+    def __getitem__(self, index):
+        path = self.paths[index]
+        pickle_data = pkload(path)
+        x = pickle_data['moved']['data']
+        y = pickle_data['fixed']['data']
+        x, y = x[None, ...], y[None, ...]
+        x, y = self.transforms([x, y])
+        x = np.ascontiguousarray(x)# [Bsize,channelsHeight,,Width,Depth]
+        y = np.ascontiguousarray(y)
+        x, y = torch.from_numpy(x), torch.from_numpy(y)
+        return x, y
+
+    def __len__(self):
+        return len(self.paths)
+    

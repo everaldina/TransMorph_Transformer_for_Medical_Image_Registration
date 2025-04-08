@@ -14,6 +14,8 @@ from models.TransMorph_affine import CONFIGS as CONFIGS_TM
 import models.TransMorph_affine as TransMorph
 import torch.nn as nn
 import argparse
+from skimage.metrics import structural_similarity as ssim
+import datetime
 
 def affine_aug(im, im_label=None, seed=10):
     # mode = 'bilinear' or 'nearest'
@@ -159,27 +161,29 @@ def main():
                                          trans.NumpyType((np.float32, np.float32)),
                                          ])
 
-    val_composed = transforms.Compose([trans.Seg_norm(), #rearrange segmentation label to 1 to 46
-                                       trans.NumpyType((np.float32, np.int16))])
-    train_set = datasets.IXIBrainDataset(glob.glob(train_dir + '*.pkl'), atlas_dir, transforms=train_composed)
-    val_set = datasets.IXIBrainInferDataset(glob.glob(val_dir + '*.pkl'), atlas_dir, transforms=val_composed)
+    val_composed = transforms.Compose([trans.Seg_norm(),
+                                       trans.NumpyType((np.float32, np.float32))])
+    train_set = datasets.OrCaScoreDataSet(glob.glob(train_dir + '*.pkl'), transforms=train_composed)
+    val_set = datasets.OrCaScoreDataSet(glob.glob(val_dir + '*.pkl'), transforms=val_composed)
     train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
-    val_loader = DataLoader(val_set, batch_size=1, shuffle=False, num_workers=4, pin_memory=True, drop_last=True)
+    val_loader = DataLoader(val_set, batch_size=1, shuffle=False, num_workers=4, pin_memory=True)
     optimizer = optim.AdamW(model.parameters(), lr=lr)
     criterion = nn.MSELoss()
     for epoch in range(epoch_start, max_epoch):
-        print('Training Starts')
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        print(f"\n[{now}] ==== Epoch start {epoch + 1}/{max_epoch} ====")
         
         # Training
         idx = 0
+        print('Training Starts')
         for data in train_loader:
             idx += 1
             model.train()
             data = [t.cuda() for t in data]
-            atlas = data[0]
-            pat_img = data[1]
-            x_ = affine_aug(pat_img, seed=idx)
-            y_ = atlas
+            x = data[0]
+            y = data[1]
+            x_ = affine_aug(x, seed=idx)
+            y_ = y
             aff, scl, transl, shr = model((x_, y_))
             x_trans, mat, inv_mat = affine_trans(x_, aff, scl, transl, shr)
             loss = criterion(x_trans, y_)
@@ -189,35 +193,55 @@ def main():
             optimizer.step()
 
             print('Iter {} of {} loss {:.4f}'.format(idx, len(train_loader), loss.item()))
-        print('Epoch {}'.format(epoch))
        
         # validation
         idd = 0
+        print('Validation start')
         with torch.no_grad():
+            avg_ssim = 0
             for data in val_loader:
                 model.eval()
                 data = [t.cuda() for t in data]
-                atlas = data[0]
-                pat_img = data[1]
-                x_ = affine_aug(pat_img, seed=idd)
-                y_ = atlas  # affine_aug(y_half)
+                x = data[0]
+                y = data[1]
+                x_ = affine_aug(x, seed=idd)
+                y_ = y  # affine_aug(y_half)
                 aff, scl, transl, shr = model((x_, y_))
                 x_trans, mat, inv_mat = affine_trans(x_, aff, scl, transl, shr)
                 y_trans = affine_trans.apply_affine(y_, inv_mat)
-                print(mat)
-                plt.figure()
-                plt.subplot(2, 2, 1)
-                plt.imshow(x_.cpu().detach().numpy()[0, 0, :, 96, ])
-                plt.subplot(2, 2, 2)
-                plt.imshow(y_.cpu().detach().numpy()[0, 0, :, 96, ])
-                plt.subplot(2, 2, 4)
-                plt.imshow(x_trans.cpu().detach().numpy()[0, 0, :, 96, ])
-                plt.subplot(2, 2, 3)
-                plt.imshow(y_trans.cpu().detach().numpy()[0, 0, :, 96, ])
-                plt.savefig('reg_results{}'.format(idd))
-                plt.close()
+                
+                
+                avg_ssim += ssim(x_trans, y_, data_range= max(x_trans, y_) - min(x_trans, y_))
+                
+                if (epoch % 10 == 0) or (epoch == max_epoch - 1):
+                    # print(mat)
+                    plt.figure()
+                    plt.subplot(2, 2, 1)
+                    plt.imshow(x_.cpu().detach().numpy()[0, 0, :, 32, ])
+                    plt.title('Imagem original - X')
+                    
+                    plt.subplot(2, 2, 2)
+                    plt.imshow(y_.cpu().detach().numpy()[0, 0, :, 32, ])
+                    plt.title('Imagem alvo - Y')
+                    
+                    plt.subplot(2, 2, 4)
+                    plt.imshow(x_trans.cpu().detach().numpy()[0, 0, :, 32, ])
+                    plt.title('Transformação de Y')
+                    
+                    plt.subplot(2, 2, 3)
+                    plt.imshow(y_trans.cpu().detach().numpy()[0, 0, :, 32, ])
+                    plt.title('Transformação de X')
+                    
+                    
+                    plt.suptitle('Comparação de transformação afim - epoca ' + epoch+1, fontsize=16)  # Título geral
+                    plt.tight_layout(rect=[0, 0, 1, 0.95])
+                    plt.savefig(f'reg_results{idd}-epc{epoch+1}')
+                    plt.close()
                 idd += 1
-        if (epoch % 2 == 0) or (epoch == max_epoch - 1):
+            avg_ssim = avg_ssim/len(val_loader)
+            print(f'Average SSMI = {avg_ssim}')
+        if (epoch % 5 == 0) or (epoch == max_epoch - 1):
+            print('Save epoch', epoch+1)
             torch.save(model.state_dict(), os.path.join(model_dir, f'epc_{epoch + 1}.pth.tar'))
         # TODO:  colocar avg ssmi ??
 
