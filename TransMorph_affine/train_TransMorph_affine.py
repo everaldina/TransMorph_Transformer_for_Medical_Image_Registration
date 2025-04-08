@@ -93,7 +93,7 @@ def args_input():
     parser.add_argument('--train_dir', type=str, default='train', help='path to train data')
     parser.add_argument('--val_dir', type=str,  default='val', help='path to val data')
     parser.add_argument('--save_dir', type=str,  default='transmorph_affine', help='Save folder')
-    parser.add_argument('--lr', type=float,  default=0.1, help='Learning Rate')
+    parser.add_argument('--lr', type=float,  default=0.0001, help='Learning Rate')
     parser.add_argument('--batch_size', type=int,  default=1, help='Batch size')
     parser.add_argument('--continue_train', action='store_true', help='Flag for continue training a model')
     parser.add_argument('--num_epochs', type=int, default=500, help='Total number of epochs')
@@ -145,12 +145,13 @@ def main():
     if cont_training:
         if epoch_start == 0:
             raise Exception('Set a model to load')
-        updated_lr = round(lr * np.power(1 - (epoch_start) / max_epoch, 0.9),8) # TODO: usar funcao
-        best_model = torch.load(model_dir + natsorted(os.listdir(model_dir))[-1])['state_dict']
-        print('Model: {} loaded!'.format(natsorted(os.listdir(model_dir))[-1]))
+        # updated_lr = round(lr * np.power(1 - (epoch_start) / max_epoch, 0.9),8)
+        # best_model = torch.load(model_dir + natsorted(os.listdir(model_dir))[-1])['state_dict']
+        best_model = torch.load(os.path.join(model_dir, f' epc_{epoch_start}.pth.tar'))
+        print(f'Model: epc_{epoch_start}.pth.tar loaded!')
         model.load_state_dict(best_model)
-    else:
-        updated_lr = lr
+    # else:
+    #     updated_lr = lr
 
     # Initialize training
     # TODO: verificar modficcao vit
@@ -158,21 +159,18 @@ def main():
                                          trans.NumpyType((np.float32, np.float32)),
                                          ])
 
-    # TODO: criar orcascore clase
-    # TODO: ver bo de tipos
     val_composed = transforms.Compose([trans.Seg_norm(), #rearrange segmentation label to 1 to 46
                                        trans.NumpyType((np.float32, np.int16))])
     train_set = datasets.IXIBrainDataset(glob.glob(train_dir + '*.pkl'), atlas_dir, transforms=train_composed)
     val_set = datasets.IXIBrainInferDataset(glob.glob(val_dir + '*.pkl'), atlas_dir, transforms=val_composed)
     train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
     val_loader = DataLoader(val_set, batch_size=1, shuffle=False, num_workers=4, pin_memory=True, drop_last=True)
-    optimizer = optim.AdamW(model.parameters(), lr=0.0001)
+    optimizer = optim.AdamW(model.parameters(), lr=lr)
     criterion = nn.MSELoss()
     for epoch in range(epoch_start, max_epoch):
         print('Training Starts')
-        '''
-        Training
-        '''
+        
+        # Training
         idx = 0
         for data in train_loader:
             idx += 1
@@ -192,9 +190,8 @@ def main():
 
             print('Iter {} of {} loss {:.4f}'.format(idx, len(train_loader), loss.item()))
         print('Epoch {}'.format(epoch))
-        '''
-        Validation
-        '''
+       
+        # validation
         idd = 0
         with torch.no_grad():
             for data in val_loader:
@@ -220,7 +217,9 @@ def main():
                 plt.savefig('reg_results{}'.format(idd))
                 plt.close()
                 idd += 1
-        # TODO: salvar
+        if (epoch % 2 == 0) or (epoch == max_epoch - 1):
+            torch.save(model.state_dict(), os.path.join(model_dir, f'epc_{epoch + 1}.pth.tar'))
+        # TODO:  colocar avg ssmi ??
 
 
 def comput_fig(img):
@@ -248,7 +247,7 @@ def mk_grid_img(grid_step, line_thickness=1, grid_sz=(160, 192, 224)):
     return grid_img
 
 def save_checkpoint(state, save_dir='models', filename='checkpoint.pth.tar', max_model_num=8):
-    torch.save(state, save_dir+filename)
+    torch.save(state, os.path.join(save_dir, filename))
     model_lists = natsorted(glob.glob(save_dir + '*'))
     while len(model_lists) > max_model_num:
         os.remove(model_lists[0])
