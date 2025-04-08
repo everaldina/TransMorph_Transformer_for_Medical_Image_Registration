@@ -209,8 +209,8 @@ def main(config):
             #     fuse_splits(fA, fB, result_folder, suffixA = "N", suffixB = "T")
             case 'T128_normalized':
                 '''64 pares de imagem T64_normalized + 64 pares de imagem T64_transformed'''
-                fA = f'{config['result_folder']}/T64_normalized/{phase}'
-                fB = f'{config['result_folder']}/T64_transformed/{phase}'
+                fA = f'{config["result_folder"]}/T64_normalized/{phase}'
+                fB = f'{config["result_folder"]}/T64_transformed/{phase}'
                 fuse_splits(fA, fB, result_folder, suffixA = "N", suffixB = "T")
             case _:
                 print("Invalid mode")
