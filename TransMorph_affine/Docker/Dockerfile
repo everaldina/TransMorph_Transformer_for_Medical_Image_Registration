@@ -19,9 +19,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     dos2unix \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Diretório da aplicação
-WORKDIR /repositorio
-
 RUN pip install --upgrade pip \
  && pip install torch==2.0.1 torchvision==0.15.2 torchaudio==2.0.2 --index-url https://download.pytorch.org/whl/cu118
 
