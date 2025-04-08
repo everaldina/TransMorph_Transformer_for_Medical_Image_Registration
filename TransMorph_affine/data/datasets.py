@@ -89,8 +89,8 @@ class OrCaScoreDataSet(Dataset):
     def __getitem__(self, index):
         path = self.paths[index]
         pickle_data = pkload(path)
-        x = pickle_data['moved']['data']
-        y = pickle_data['fixed']['data']
+        x = pickle_data['moved']
+        y = pickle_data['fixed']
         x, y = x[None, ...], y[None, ...]
         x, y = self.transforms([x, y])
         x = np.ascontiguousarray(x)# [Bsize,channelsHeight,,Width,Depth]
