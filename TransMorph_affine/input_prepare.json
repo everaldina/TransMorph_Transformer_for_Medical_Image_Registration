@@ -1,0 +1,12 @@
+{
+    "result_folder": "/workspace/data/orCaScore/vit-v-net/",
+    "split_path": "/workspace/data/orCaScore/cytran/",
+    "orca_folder": "/workspace/data/orCaScore/Challenge_data/Training_set/Images",
+    "cytran": {
+        "net_A_folder": null,
+        "net_B_folder": null
+    },
+    "train": "T64_transformed",
+    "_train_options": ["T64_normalized", "T64_transformed", "T128_normalized"],
+    "result_slices": 64
+}
