@@ -159,7 +159,7 @@ def crop_img(x_image, y_image, result_size):
     return x_image_cropped, y_image_cropped, start_add, end_add
 
 def main(config):
-    mode = config['T64_transformed']
+    mode = config['train']
     phases = ['train', 'test']
     for phase in phases:
         result_folder = f'{config["result_folder"]}/{mode}/{phase}'
