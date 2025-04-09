@@ -162,7 +162,7 @@ def main(config):
     mode = config['T64_transformed']
     phases = ['train', 'test']
     for phase in phases:
-        result_folder = f'{config['result_folder']}/{mode}/{phase}'
+        result_folder = f'{config["result_folder"]}/{mode}/{phase}'
         orcascore_folder = config['orca_folder']
         netA_folder = config['netA_folder']
         netB_folder = config['netB_folder']
