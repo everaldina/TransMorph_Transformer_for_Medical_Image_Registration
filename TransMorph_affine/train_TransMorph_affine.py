@@ -1,4 +1,3 @@
-from torch.utils.tensorboard import SummaryWriter
 import os, utils, glob, losses, random, math
 import sys
 from torch.utils.data import DataLoader
@@ -94,7 +93,7 @@ def args_input():
     parser = argparse.ArgumentParser(description='Affine TransMorph Affine')
     parser.add_argument('--train_dir', type=str, default='train', help='path to train data')
     parser.add_argument('--val_dir', type=str,  default='val', help='path to val data')
-    parser.add_argument('--save_dir', type=str,  default='transmorph_affine', help='Save folder')
+    parser.add_argument('--save', type=str,  default='transmorph_affine', help='Save folder')
     parser.add_argument('--lr', type=float,  default=0.0001, help='Learning Rate')
     parser.add_argument('--batch_size', type=int,  default=1, help='Batch size')
     parser.add_argument('--continue_train', action='store_true', help='Flag for continue training a model')
