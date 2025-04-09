@@ -14,7 +14,7 @@ import models.TransMorph_affine as TransMorph
 import torch.nn as nn
 import argparse
 from skimage.metrics import structural_similarity as ssim
-import datetime
+from datetime import datetime
 
 def affine_aug(im, im_label=None, seed=10):
     # mode = 'bilinear' or 'nearest'
@@ -107,7 +107,7 @@ def main():
     # atlas_dir = 'D:/DATA/IXI/atlas.pkl'
     train_dir = args.train_dir
     val_dir = args.val_dir
-    save_dir = args.save_dir
+    save_dir = args.save
     
     model_dir = os.path.join('experiments', save_dir)
     log_dir = os.path.join('logs', save_dir)
@@ -162,8 +162,8 @@ def main():
 
     val_composed = transforms.Compose([trans.Seg_norm(),
                                        trans.NumpyType((np.float32, np.float32))])
-    train_set = datasets.OrCaScoreDataSet(glob.glob(train_dir + '*.pkl'), transforms=train_composed)
-    val_set = datasets.OrCaScoreDataSet(glob.glob(val_dir + '*.pkl'), transforms=val_composed)
+    train_set = datasets.OrCaScoreDataSet(glob.glob(train_dir + '/*.pkl'), transforms=train_composed)
+    val_set = datasets.OrCaScoreDataSet(glob.glob(val_dir + '/*.pkl'), transforms=val_composed)
     train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
     val_loader = DataLoader(val_set, batch_size=1, shuffle=False, num_workers=4, pin_memory=True)
     optimizer = optim.AdamW(model.parameters(), lr=lr)
@@ -280,7 +280,7 @@ if __name__ == '__main__':
     '''
     GPU configuration
     '''
-    GPU_iden = 1
+    GPU_iden = 0
     GPU_num = torch.cuda.device_count()
     print('Number of GPU: ' + str(GPU_num))
     for GPU_idx in range(GPU_num):
