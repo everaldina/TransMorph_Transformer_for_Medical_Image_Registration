@@ -164,8 +164,8 @@ def main(config):
     for phase in phases:
         result_folder = f'{config["result_folder"]}/{mode}/{phase}'
         orcascore_folder = config['orca_folder']
-        netA_folder = config['netA_folder']
-        netB_folder = config['netB_folder']
+        netA_folder = config['net_A_folder']
+        netB_folder = config['net_B_folder']
         
         # deve conter um train_data.csv e test.csv
         split_path = f'{config["split_path"]}/{phase}_data.csv'
