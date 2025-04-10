@@ -76,20 +76,6 @@ def affine_aug(im, im_label=None, seed=10):
         else:
             return im
 
-class Logger(object):
-    def __init__(self, save_dir, epoch_start=None):
-        self.terminal = sys.stdout
-        self.log = open(os.path.join(save_dir, f"logfile_epoch_str{epoch_start}.log"), "a", buffering=1)
-
-    def write(self, message):
-        self.terminal.write(message)
-        self.log.write(message)
-
-    def flush(self):
-        self.terminal.flush()
-        self.log.flush()
-
-
 def args_input():
     parser = argparse.ArgumentParser(description='Affine TransMorph Affine')
     parser.add_argument('--train_dir', type=str, default='train', help='path to train data')
@@ -127,7 +113,7 @@ def main():
     log_dir = os.path.join('logs', save_dir)
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
-    sys.stdout = Logger(log_dir, epoch_start)
+    sys.stdout = utils.Logger(log_dir, f"logfile_epoch_str{epoch_start}.log")
     sys.stderr = sys.stdout
     
     
@@ -140,17 +126,10 @@ def main():
     config.window_size = (H // 16, W // 128, D // 128)
     
     model = TransMorph.TransMorphAffine(config)
-    model.cuda()
     affine_trans = TransMorph.AffineTransform()#AffineTransformer((H, W, D)).cuda()
-    
-    # Initialize spatial transformation function
-    reg_model = utils.register_model(config.img_size, 'nearest')
-    reg_model.cuda()
-    reg_model_bilin = utils.register_model(config.img_size, 'bilinear')
-    reg_model_bilin.cuda()
+
 
     # If continue from previous training
-    # TODO: validar forma de save e load
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
     if cont_training:
         if epoch_start == 0:
@@ -161,6 +140,7 @@ def main():
         print(f'Model: epc_{epoch_start}.pth.tar loaded!')
         model.load_state_dict(best_model)
         optimizer.load_state_dict(torch.load(os.path.join(model_dir, f' epc_{epoch_start}.pth.tar'))['optimizer'])
+    model.cuda()
         
     # else:
     #     updated_lr = lr
