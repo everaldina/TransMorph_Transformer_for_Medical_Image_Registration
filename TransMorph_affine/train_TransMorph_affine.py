@@ -151,14 +151,17 @@ def main():
 
     # If continue from previous training
     # TODO: validar forma de save e load
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
     if cont_training:
         if epoch_start == 0:
             raise Exception('Set a model to load')
         # updated_lr = round(lr * np.power(1 - (epoch_start) / max_epoch, 0.9),8)
         # best_model = torch.load(model_dir + natsorted(os.listdir(model_dir))[-1])['state_dict']
-        best_model = torch.load(os.path.join(model_dir, f' epc_{epoch_start}.pth.tar'))
+        best_model = torch.load(os.path.join(model_dir, f' epc_{epoch_start}.pth.tar'))['model_state']
         print(f'Model: epc_{epoch_start}.pth.tar loaded!')
         model.load_state_dict(best_model)
+        optimizer.load_state_dict(torch.load(os.path.join(model_dir, f' epc_{epoch_start}.pth.tar'))['optimizer'])
+        
     # else:
     #     updated_lr = lr
 
@@ -174,7 +177,6 @@ def main():
     val_set = datasets.OrCaScoreDataSet(glob.glob(val_dir + '/*.pkl'), transforms=val_composed)
     train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
     val_loader = DataLoader(val_set, batch_size=1, shuffle=False, num_workers=4, pin_memory=True)
-    optimizer = optim.AdamW(model.parameters(), lr=lr)
     criterion = nn.MSELoss()
     for epoch in range(epoch_start, max_epoch):
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -258,7 +260,11 @@ def main():
             print(f'Average SSMI = {avg_ssim}')
         if (epoch % 5 == 0) or (epoch == max_epoch - 1):
             print('Save epoch', epoch+1)
-            torch.save(model.state_dict(), os.path.join(model_dir, f'epc_{epoch + 1}.pth.tar'))
+            save_state = {
+                'model_state': model.state_dict(),
+                'optimizer': optimizer.state_dict()
+            }
+            torch.save(save_state, os.path.join(model_dir, f'epc_{epoch + 1}.pth.tar'))
         # TODO:  colocar avg ssmi ??
 
 
