@@ -88,6 +88,8 @@ class OrCaScoreDataSet(Dataset):
 
     def __getitem__(self, index):
         path = self.paths[index]
+        dot_pos = path.rindex(".")
+        id_image = path[dot_pos-6:dot_pos]
         pickle_data = pkload(path)
         x = pickle_data['moved']
         y = pickle_data['fixed']
@@ -96,7 +98,7 @@ class OrCaScoreDataSet(Dataset):
         x = np.ascontiguousarray(x)# [Bsize,channelsHeight,,Width,Depth]
         y = np.ascontiguousarray(y)
         x, y = torch.from_numpy(x), torch.from_numpy(y)
-        return x, y
+        return x, y, id_image
 
     def __len__(self):
         return len(self.paths)
