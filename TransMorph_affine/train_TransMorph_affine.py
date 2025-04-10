@@ -77,9 +77,9 @@ def affine_aug(im, im_label=None, seed=10):
             return im
 
 class Logger(object):
-    def __init__(self, save_dir):
+    def __init__(self, save_dir, epoch_start=None):
         self.terminal = sys.stdout
-        self.log = open(os.path.join(save_dir, "logfile.log"), "a", buffering=1)
+        self.log = open(os.path.join(save_dir, f"logfile_epoch_str{epoch_start}.log"), "a", buffering=1)
 
     def write(self, message):
         self.terminal.write(message)
@@ -111,13 +111,12 @@ def main():
     save_dir = args.save
     
     model_dir = os.path.join('experiments', save_dir)
-    log_dir = os.path.join('logs', save_dir)
     if not os.path.exists(model_dir):
         os.makedirs(model_dir)
-    if not os.path.exists(log_dir):
-        os.makedirs(log_dir)
-    sys.stdout = Logger(log_dir)
-    sys.stderr = sys.stdout
+    
+    img_dir = os.path.join(model_dir, 'images')
+    if not os.path.exists(img_dir):
+        os.makedirs(model_dir)
     
     batch_size = args.batch_size
     lr = args.lr
@@ -125,6 +124,13 @@ def main():
     max_epoch = args.num_epochs
     cont_training = args.continue_train
 
+    log_dir = os.path.join('logs', save_dir)
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
+    sys.stdout = Logger(log_dir, epoch_start)
+    sys.stderr = sys.stdout
+    
+    
 
     # Initialize model
     # TODO: Pensar em como setar h, w, d
@@ -200,6 +206,7 @@ def main():
         print('Validation start')
         with torch.no_grad():
             avg_ssim = 0
+            ssim_count = 0
             for data in val_loader:
                 model.eval()
                 data = [t.cuda() for t in data]
@@ -215,7 +222,12 @@ def main():
                 y_np = y_.squeeze().detach().cpu().numpy()
                 
                 data_range = max(x_np.max(), y_np.max()) - min(x_np.min(), y_np.min())
-                avg_ssim += ssim(x_np, y_np, data_range= data_range)
+                
+                if data_range == 0 or np.isnan(data_range) or np.isinf(data_range):
+                    continue
+                else:
+                    avg_ssim += ssim(x_np, y_np, data_range= data_range)
+                    ssim_count += 1
                 
                 if (epoch % 10 == 0) or (epoch == max_epoch - 1):
                     # print(mat)
@@ -239,10 +251,10 @@ def main():
                     
                     plt.suptitle('Comparação de transformação afim - epoca ' + str(epoch+1), fontsize=16)  # Título geral
                     plt.tight_layout(rect=[0, 0, 1, 0.95])
-                    plt.savefig(f'reg_results{idd}-epc{epoch+1}')
+                    plt.savefig(os.path.join(img_dir, f'reg_results{idd}-epc{epoch+1}'))
                     plt.close()
                 idd += 1
-            avg_ssim = avg_ssim/len(val_loader)
+            avg_ssim = avg_ssim/ssim_count
             print(f'Average SSMI = {avg_ssim}')
         if (epoch % 5 == 0) or (epoch == max_epoch - 1):
             print('Save epoch', epoch+1)
