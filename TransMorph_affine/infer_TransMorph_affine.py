@@ -143,7 +143,7 @@ def main():
     affine_trans = TransMorph.AffineTransform()#AffineTransformer((H, W, D)).cuda()
     
     
-    best_model = torch.load(os.path.join(model_dir, f' epc_{epoch}.pth.tar'))['model_state']
+    best_model = torch.load(os.path.join(model_dir, f'epc_{epoch}.pth.tar'))['model_state']
     print(f'Model: epc_{epoch}.pth.tar loaded!')
     model.load_state_dict(best_model)
     model.cuda()
@@ -174,8 +174,8 @@ def main():
         print('========================== Infer Set ==========================')
         for data in val_loader:
             model.eval()
-            data = [t.cuda() for t in data[:2]]
             id_name = data[2]
+            data = [t.cuda() for t in data[:2]]
             infer_data['image'].append(id_name)
             print('- infer ' + id_name)
             x = data[0]
@@ -236,8 +236,8 @@ def main():
             print('========================== Training Set ==========================')
             for data in train_loader:
                 model.eval()
-                data = [t.cuda() for t in data[:2]]
                 id_name = data[2]
+                data = [t.cuda() for t in data[:2]]
                 train_data['image'].append(id_name)
                 print('- infer ' + id_name)
                 x = data[0]
