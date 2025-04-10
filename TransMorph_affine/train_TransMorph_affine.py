@@ -79,14 +79,15 @@ def affine_aug(im, im_label=None, seed=10):
 class Logger(object):
     def __init__(self, save_dir):
         self.terminal = sys.stdout
-        self.log = open(os.path.join(save_dir, "logfile.log"), "a")
+        self.log = open(os.path.join(save_dir, "logfile.log"), "a", buffering=1)
 
     def write(self, message):
         self.terminal.write(message)
         self.log.write(message)
 
     def flush(self):
-        pass
+        self.terminal.flush()
+        self.log.flush()
 
 
 def args_input():
@@ -116,6 +117,7 @@ def main():
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
     sys.stdout = Logger(log_dir)
+    sys.stderr = sys.stdout
     
     batch_size = args.batch_size
     lr = args.lr
@@ -126,10 +128,10 @@ def main():
 
     # Initialize model
     # TODO: Pensar em como setar h, w, d
-    H, W, D = 160, 192, 224
+    H, W, D = 64, 512, 512
     config = CONFIGS_TM['TransMorph_Affine']
     config.img_size = (H, W, D)
-    config.window_size = (H // 32, W // 32, D // 32)
+    config.window_size = (H // 16, W // 128, D // 128)
     
     model = TransMorph.TransMorphAffine(config)
     model.cuda()
@@ -208,9 +210,12 @@ def main():
                 aff, scl, transl, shr = model((x_, y_))
                 x_trans, mat, inv_mat = affine_trans(x_, aff, scl, transl, shr)
                 y_trans = affine_trans.apply_affine(y_, inv_mat)
+
+                x_np = x_trans.squeeze().detach().cpu().numpy()
+                y_np = y_.squeeze().detach().cpu().numpy()
                 
-                
-                avg_ssim += ssim(x_trans, y_, data_range= max(x_trans, y_) - min(x_trans, y_))
+                data_range = max(x_np.max(), y_np.max()) - min(x_np.min(), y_np.min())
+                avg_ssim += ssim(x_np, y_np, data_range= data_range)
                 
                 if (epoch % 10 == 0) or (epoch == max_epoch - 1):
                     # print(mat)
@@ -232,7 +237,7 @@ def main():
                     plt.title('Transformação de X')
                     
                     
-                    plt.suptitle('Comparação de transformação afim - epoca ' + epoch+1, fontsize=16)  # Título geral
+                    plt.suptitle('Comparação de transformação afim - epoca ' + str(epoch+1), fontsize=16)  # Título geral
                     plt.tight_layout(rect=[0, 0, 1, 0.95])
                     plt.savefig(f'reg_results{idd}-epc{epoch+1}')
                     plt.close()

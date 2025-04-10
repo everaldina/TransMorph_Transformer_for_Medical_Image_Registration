@@ -90,9 +90,9 @@ def get_3DTransMorph_Affine_config():
     config.if_convskip = True
     config.patch_size = 4
     config.in_chans = 2
-    config.embed_dim = 96
-    config.depths = (2, 2, 4, 2)
-    config.num_heads = (4, 4, 8, 8)
+    config.embed_dim = 12
+    config.depths = (1, 1, 2, 2)
+    config.num_heads = (1, 1, 2, 2)
     config.window_size = (5, 6, 7, 7)
     config.mlp_ratio = 4
     config.pat_merg_rf = 4

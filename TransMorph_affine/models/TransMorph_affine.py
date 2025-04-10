@@ -14,6 +14,8 @@ import torch.nn.functional as nnf
 import numpy as np
 import models.configs_TransMorph as configs
 
+from torch.nn import LazyLinear
+
 class Mlp(nn.Module):
     def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.GELU, drop=0.):
         super().__init__()
@@ -888,7 +890,7 @@ class TransMorphAffine(nn.Module):
                                            pat_merg_rf=config.pat_merg_rf,
                                            )
         self.aff_mlp = nn.Sequential()
-        aff_head = nn.Linear(embed_dim * 8 * np.prod(config.window_size), 100)
+        aff_head = LazyLinear(100)
         self.aff_mlp.append(aff_head)
         relu_aff = nn.LeakyReLU()
         self.aff_mlp.append(relu_aff)
@@ -898,7 +900,7 @@ class TransMorphAffine(nn.Module):
         self.aff_mlp.append(aff_head_f)
 
         self.scl_mlp = nn.Sequential()
-        scl_head = nn.Linear(embed_dim * 8 * np.prod(config.window_size), 100)
+        scl_head = LazyLinear(100)
         self.scl_mlp.append(scl_head)
         relu_scl = nn.LeakyReLU()
         self.scl_mlp.append(relu_scl)
@@ -908,7 +910,7 @@ class TransMorphAffine(nn.Module):
         self.scl_mlp.append(scl_head_f)
 
         self.trans_mlp = nn.Sequential()
-        trans_head = nn.Linear(embed_dim * 8 * np.prod(config.window_size), 100)
+        trans_head = LazyLinear(100)
         self.trans_mlp.append(trans_head)
         relu_trans = nn.LeakyReLU()
         self.trans_mlp.append(relu_trans)
@@ -918,7 +920,7 @@ class TransMorphAffine(nn.Module):
         self.trans_mlp.append(trans_head_f)
 
         self.shear_mlp = nn.Sequential()
-        shear_head = nn.Linear(embed_dim * 8 * np.prod(config.window_size), 100)
+        shear_head = LazyLinear(100)
         self.shear_mlp.append(shear_head)
         relu_shear = nn.LeakyReLU()
         self.shear_mlp.append(relu_shear)
