@@ -129,8 +129,8 @@ def main():
         raise Exception("Pasta do modelo deve existir")
     
     infer_dir = os.path.join(model_dir,'infer')
-    if not os.path.exists(model_dir):
-        os.makedirs(model_dir)
+    if not os.path.exists(infer_dir):
+        os.makedirs(infer_dir)
 
     # Initialize model
     # TODO: Pensar em como setar h, w, d
@@ -143,18 +143,15 @@ def main():
     affine_trans = TransMorph.AffineTransform()#AffineTransformer((H, W, D)).cuda()
     
     
-    best_model = torch.load(os.path.join(model_dir, f'epc_{epoch}.pth.tar'))['model_state']
+    best_model = torch.load(os.path.join(model_dir, f'epc_{epoch}.pth.tar'))
     print(f'Model: epc_{epoch}.pth.tar loaded!')
     model.load_state_dict(best_model)
     model.cuda()
         
 
-    train_composed = transforms.Compose([trans.RandomFlip(0),
-                                         trans.NumpyType((np.float32, np.float32)),
-                                         ])
+    train_composed = transforms.Compose([trans.NumpyType((np.float32, np.float32))])
 
-    val_composed = transforms.Compose([trans.Seg_norm(),
-                                       trans.NumpyType((np.float32, np.float32))])
+    val_composed = transforms.Compose([trans.NumpyType((np.float32, np.float32))])
     
     val_set = datasets.OrCaScoreDataSet(glob.glob(val_dir + '/*.pkl'), transforms=val_composed)
     val_loader = DataLoader(val_set, batch_size=1, shuffle=False, num_workers=4, pin_memory=True)
@@ -174,7 +171,7 @@ def main():
         print('========================== Infer Set ==========================')
         for data in val_loader:
             model.eval()
-            id_name = data[2]
+            id_name = data[2][0]
             data = [t.cuda() for t in data[:2]]
             infer_data['image'].append(id_name)
             print('- infer ' + id_name)
@@ -204,8 +201,8 @@ def main():
                 save_pickle(os.path.join(infer_dir, f'{id_name}_transformed.pkl'), x_trans_np)
                 save_pickle(os.path.join(infer_dir, f'{id_name}_params.pkl'), params)
             
-            infer_data['mae_post'].append(calc_mae(x, y))
-            infer_data['rmse_post'].append(calc_rmse(x, y))
+            infer_data['mae_post'].append(calc_mae(x_trans, y))
+            infer_data['rmse_post'].append(calc_rmse(x_trans, y))
             try:
                 infer_data['ssim_post'].append(calc_ssim(x_trans, y))
             except:
@@ -236,7 +233,7 @@ def main():
             print('========================== Training Set ==========================')
             for data in train_loader:
                 model.eval()
-                id_name = data[2]
+                id_name = data[2][0]
                 data = [t.cuda() for t in data[:2]]
                 train_data['image'].append(id_name)
                 print('- infer ' + id_name)
@@ -257,8 +254,8 @@ def main():
                 
 
                 
-                train_data['mae_post'].append(calc_mae(x, y))
-                train_data['rmse_post'].append(calc_rmse(x, y))
+                train_data['mae_post'].append(calc_mae(x_trans, y))
+                train_data['rmse_post'].append(calc_rmse(x_trans, y))
                 try:
                     train_data['ssim_post'].append(calc_ssim(x_trans, y))
                 except:

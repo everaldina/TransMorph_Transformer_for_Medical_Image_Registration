@@ -151,8 +151,7 @@ def main():
                                          trans.NumpyType((np.float32, np.float32)),
                                          ])
 
-    val_composed = transforms.Compose([trans.Seg_norm(),
-                                       trans.NumpyType((np.float32, np.float32))])
+    val_composed = transforms.Compose([trans.NumpyType((np.float32, np.float32))])
     train_set = datasets.OrCaScoreDataSet(glob.glob(train_dir + '/*.pkl'), transforms=train_composed)
     val_set = datasets.OrCaScoreDataSet(glob.glob(val_dir + '/*.pkl'), transforms=val_composed)
     train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
