@@ -98,7 +98,12 @@ class OrCaScoreDataSet(Dataset):
         x = np.ascontiguousarray(x)# [Bsize,channelsHeight,,Width,Depth]
         y = np.ascontiguousarray(y)
         x, y = torch.from_numpy(x), torch.from_numpy(y)
-        return x, y, id_image
+        return {    'x': x, 
+                    'y': y, 
+                    'id_image': id_image,
+                    'padding_start': pickle_data['padding_start'],
+                    'padding_end': pickle_data['padding_end'] 
+                }
 
     def __len__(self):
         return len(self.paths)

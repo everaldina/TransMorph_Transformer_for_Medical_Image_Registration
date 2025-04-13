@@ -167,9 +167,8 @@ def main():
         for data in train_loader:
             idx += 1
             model.train()
-            data = [t.cuda() for t in data]
-            x = data[0]
-            y = data[1]
+            x = data['x'].cuda()
+            y = data['y'].cuda()
             x_ = affine_aug(x, seed=idx)
             y_ = y
             aff, scl, transl, shr = model((x_, y_))
@@ -190,9 +189,8 @@ def main():
             ssim_count = 0
             for data in val_loader:
                 model.eval()
-                data = [t.cuda() for t in data]
-                x = data[0]
-                y = data[1]
+                x = data['x'].cuda()
+                y = data['y'].cuda()
                 x_ = affine_aug(x, seed=idd)
                 y_ = y  # affine_aug(y_half)
                 aff, scl, transl, shr = model((x_, y_))
@@ -237,7 +235,7 @@ def main():
                 idd += 1
             avg_ssim = avg_ssim/ssim_count
             print(f'Average SSMI = {avg_ssim}')
-        if (epoch % 5 == 0) or (epoch == max_epoch - 1):
+        if (epoch % 10 == 0) or (epoch == max_epoch - 1):
             print('Save epoch', epoch+1)
             save_state = {
                 'model_state': model.state_dict(),
@@ -246,30 +244,6 @@ def main():
             torch.save(save_state, os.path.join(model_dir, f'epc_{epoch + 1}.pth.tar'))
         # TODO:  colocar avg ssmi ??
 
-
-def comput_fig(img):
-    img = img.detach().cpu().numpy()[0, 0, 48:64, :, :]
-    fig = plt.figure(figsize=(12,12), dpi=180)
-    for i in range(img.shape[0]):
-        plt.subplot(4, 4, i + 1)
-        plt.axis('off')
-        plt.imshow(img[i, :, :], cmap='gray')
-    fig.subplots_adjust(wspace=0, hspace=0)
-    return fig
-
-def adjust_learning_rate(optimizer, epoch, MAX_EPOCHES, INIT_LR, power=0.9):
-    for param_group in optimizer.param_groups:
-        param_group['lr'] = round(INIT_LR * np.power( 1 - (epoch) / MAX_EPOCHES , power), 8)
-
-def mk_grid_img(grid_step, line_thickness=1, grid_sz=(160, 192, 224)):
-    grid_img = np.zeros(grid_sz)
-    for j in range(0, grid_img.shape[1], grid_step):
-        grid_img[:, j+line_thickness-1, :] = 1
-    for i in range(0, grid_img.shape[2], grid_step):
-        grid_img[:, :, i+line_thickness-1] = 1
-    grid_img = grid_img[None, None, ...]
-    grid_img = torch.from_numpy(grid_img).cuda()
-    return grid_img
 
 def save_checkpoint(state, save_dir='models', filename='checkpoint.pth.tar', max_model_num=8):
     torch.save(state, os.path.join(save_dir, filename))

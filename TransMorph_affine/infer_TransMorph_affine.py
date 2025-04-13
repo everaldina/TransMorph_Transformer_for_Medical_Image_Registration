@@ -68,12 +68,10 @@ def main():
         print('========================== Infer Set ==========================')
         for data in val_loader:
             model.eval()
-            id_name = data[2][0]
-            data = [t.cuda() for t in data[:2]]
-            infer_data['image'].append(id_name)
+            id_name = data['id_image'][0]
             print('- infer ' + id_name)
-            x = data[0]
-            y = data[1]
+            x = data['x'].cuda()
+            y = data['y'].cuda()
             
             aff, scl, transl, shr = model((x, y))
             x_trans, mat, inv_mat = affine_trans(x, aff, scl, transl, shr)
@@ -106,12 +104,10 @@ def main():
             print('========================== Training Set ==========================')
             for data in train_loader:
                 model.eval()
-                id_name = data[2][0]
-                data = [t.cuda() for t in data[:2]]
-                train_data['image'].append(id_name)
+                id_name = data['id_image'][0]
                 print('- infer ' + id_name)
-                x = data[0]
-                y = data[1]
+                x = data['x'].cuda()
+                y = data['y'].cuda()
                 
                 aff, scl, transl, shr = model((x, y))
                 x_trans, mat, inv_mat = affine_trans(x, aff, scl, transl, shr)
