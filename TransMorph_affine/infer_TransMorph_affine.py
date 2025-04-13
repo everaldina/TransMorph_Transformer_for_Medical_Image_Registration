@@ -19,6 +19,7 @@ def args_input():
     parser.add_argument('--epoch', type=int, default=0, help='Start epoch for training')
     parser.add_argument('--no_save_infer', action='store_true', help="flag for not saving infered results")
     parser.add_argument('--train_infer', action='store_true', help="eval train images. infered train images will not be saved")
+    parser.add_argument('--calc_padding', action='store_true', help="flag for calculating results without padding slices")
     return parser.parse_args()
 
 def main():
@@ -32,6 +33,7 @@ def main():
     val_dir = args.val_dir
     save_dir = args.save
     epoch = args.epoch
+    calc_padding = args.calc_padding
     
     model_dir = os.path.join('experiments', save_dir)
     if not os.path.exists(model_dir):
@@ -63,6 +65,10 @@ def main():
     val_set = datasets.OrCaScoreDataSet(glob.glob(val_dir + '/*.pkl'), transforms=val_composed)
     val_loader = DataLoader(val_set, batch_size=1, shuffle=False, num_workers=4, pin_memory=True)
     
+    if calc_padding:
+        clean_data = []
+        no_pad_data = []
+    
     infer_data = []
     with torch.no_grad():
         print('========================== Infer Set ==========================')
@@ -91,6 +97,31 @@ def main():
                     'y': y.detach().cpu().squeeze().numpy()
                 }
                 utils.save_pickle(os.path.join(infer_dir, f'{id_name}.pkl'), save_file)
+                
+            if calc_padding:
+                padding_start = data['padding_start']
+                padding_end = data['padding_end']
+                
+                print(padding_start, padding_end)
+                x_og =  x[1, 1, padding_start:padding_end+1, :, :]
+                y_og = y[1, 1, padding_start:padding_end+1, :, :]
+                print(x_og.shape, y_og.shape)
+                
+                # Calculating metrics without padding
+                x_trans_clean = x_trans[1, 1, padding_start:padding_end+1, :, :]
+                clean_data.append(metrics.calc_metrics(id_name, x_og, y_og, x_trans_clean, y_og))
+                df_clean = pd.DataFrame(clean_data)
+                
+                # Cutting padding, infer and calculating metrics
+                aff, scl, transl, shr = model((x_og, y_og))
+                x_trans, mat, inv_mat = affine_trans(x_og, aff, scl, transl, shr)
+                
+                no_pad_data.append(metrics.calc_metrics(id_name, x_og, y_og, x_trans, y_og))
+                df_no_pad = pd.DataFrame(no_pad_data)
+                
+                # Saving results
+                df_clean.to_csv(os.path.join(infer_dir, 'results_clean.csv'))
+                df_no_pad.to_csv(os.path.join(infer_dir, 'results_no_pad.csv'))
     metrics.print_metrics(infer_data)
     df_infer = pd.DataFrame(infer_data)
     
