@@ -136,10 +136,10 @@ def main():
             raise Exception('Set a model to load')
         # updated_lr = round(lr * np.power(1 - (epoch_start) / max_epoch, 0.9),8)
         # best_model = torch.load(model_dir + natsorted(os.listdir(model_dir))[-1])['state_dict']
-        best_model = torch.load(os.path.join(model_dir, f' epc_{epoch_start}.pth.tar'))['model_state']
+        best_model, epoch_optimizer = utils.load_model(os.path.join(model_dir, f' epc_{epoch_start}.pth.tar'))
         print(f'Model: epc_{epoch_start}.pth.tar loaded!')
         model.load_state_dict(best_model)
-        optimizer.load_state_dict(torch.load(os.path.join(model_dir, f' epc_{epoch_start}.pth.tar'))['optimizer'])
+        optimizer.load_state_dict(epoch_optimizer)
     model.cuda()
         
     # else:

@@ -364,3 +364,17 @@ class Logger(object):
     def flush(self):
         self.terminal.flush()
         self.log.flush()
+        
+        
+def load_model(path):
+    try: 
+        model = torch.load(path)['model_state']
+    except KeyError:
+        model = torch.load(path)
+    
+    try: 
+        optimizer = torch.load(path)['optimizer']
+    except KeyError:
+        optimizer = None
+    
+    return model, optimizer

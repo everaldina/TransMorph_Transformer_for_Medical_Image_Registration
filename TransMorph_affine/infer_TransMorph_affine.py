@@ -142,8 +142,7 @@ def main():
     model = TransMorph.TransMorphAffine(config)
     affine_trans = TransMorph.AffineTransform()#AffineTransformer((H, W, D)).cuda()
     
-    
-    best_model = torch.load(os.path.join(model_dir, f'epc_{epoch}.pth.tar'))
+    best_model, _ = utils.load_model(os.path.join(model_dir, f' epc_{epoch}.pth.tar'))
     print(f'Model: epc_{epoch}.pth.tar loaded!')
     model.load_state_dict(best_model)
     model.cuda()
