@@ -6,6 +6,7 @@ from torch import nn
 import pystrum.pynd.ndutils as nd
 from scipy.ndimage import gaussian_filter
 import os
+import pickle
 
 class AverageMeter(object):
     """Computes and stores the average and current value"""
@@ -378,3 +379,7 @@ def load_model(path):
         optimizer = None
     
     return model, optimizer
+
+def save_pickle(path, data):
+    with open(path, 'wb') as f:
+        pickle.dump(data, f)
