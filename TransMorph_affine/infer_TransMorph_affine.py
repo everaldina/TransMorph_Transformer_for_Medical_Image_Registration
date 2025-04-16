@@ -53,7 +53,7 @@ def main():
     model = TransMorph.TransMorphAffine(config)
     affine_trans = TransMorph.AffineTransform()#AffineTransformer((H, W, D)).cuda()
     
-    best_model, _ = utils.load_model(os.path.join(model_dir, f' epc_{epoch}.pth.tar'))
+    best_model, _ = utils.load_model(os.path.join(model_dir, f'epc_{epoch}.pth.tar'))
     print(f'Model: epc_{epoch}.pth.tar loaded!')
     model.load_state_dict(best_model)
     model.cuda()
@@ -67,7 +67,6 @@ def main():
     
     if calc_padding:
         clean_data = []
-        no_pad_data = []
     
     infer_data = []
     with torch.no_grad():
@@ -103,25 +102,18 @@ def main():
                 padding_end = data['padding_end']
                 
                 print(padding_start, padding_end)
-                x_og =  x[1, 1, padding_start:padding_end+1, :, :]
-                y_og = y[1, 1, padding_start:padding_end+1, :, :]
+                x_og =  x[:, :, padding_start:63-padding_end+1, :, :]
+                y_og = y[:, :, padding_start:63-padding_end+1, :, :]
                 print(x_og.shape, y_og.shape)
                 
                 # Calculating metrics without padding
-                x_trans_clean = x_trans[1, 1, padding_start:padding_end+1, :, :]
+                x_trans_clean = x_trans[:, :, padding_start:63-padding_end+1, :, :]
                 clean_data.append(metrics.calc_metrics(id_name, x_og, y_og, x_trans_clean, y_og))
-                df_clean = pd.DataFrame(clean_data)
-                
-                # Cutting padding, infer and calculating metrics
-                aff, scl, transl, shr = model((x_og, y_og))
-                x_trans, mat, inv_mat = affine_trans(x_og, aff, scl, transl, shr)
-                
-                no_pad_data.append(metrics.calc_metrics(id_name, x_og, y_og, x_trans, y_og))
-                df_no_pad = pd.DataFrame(no_pad_data)
-                
-                # Saving results
-                df_clean.to_csv(os.path.join(infer_dir, 'results_clean.csv'))
-                df_no_pad.to_csv(os.path.join(infer_dir, 'results_no_pad.csv'))
+
+    if calc_padding:
+        df_clean = pd.DataFrame(clean_data)
+        df_clean.to_csv(os.path.join(infer_dir, 'results_clean.csv'))
+
     metrics.print_metrics(infer_data)
     df_infer = pd.DataFrame(infer_data)
     

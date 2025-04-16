@@ -34,7 +34,7 @@ def calc_metrics(image_id, x_torch_pre, y_torch_pre, x_torch_post=None, y_torch_
         result['ssim_pre'] = None
     
     
-    if x_torch_post and x_torch_post:
+    if x_torch_post is not None and x_torch_post is not None:
         result['mae_post'] = calc_mae(x_torch_post, y_torch_post)
         result['rmse_post'] = calc_rmse(x_torch_post, y_torch_post)
         try:
