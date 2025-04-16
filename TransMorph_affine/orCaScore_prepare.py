@@ -73,7 +73,7 @@ def transformed2normalized(ids, ct_type, fixed, result_folder, orca_folder, netA
         y_path = os.path.join(orca_folder, f"{i}{ct_type[fixed]}.mhd")
         y_image = get_image_array(y_path)
         y_image = normalize_cytran(y_image)
-        save_pkl(x_image, y_image, os.path.join(result_folder, f"{i}.pkl"), result_slices=result_slices)
+        save_pkl(x_image, y_image, os.path.join(result_folder, f"{i}.pkl"), padding_mode=padding_mode, result_slices=result_slices)
         
 def normal2transformed(ids, ct_type, moved, result_folder, orca_folder, netB_folder):
     for i in ids:
@@ -169,7 +169,7 @@ def main(config):
     mode = config['train']
     phases = ['train', 'test']
     for phase in phases:
-        result_folder = f'{config["result_folder"]}/{mode}/{phase}'
+        result_folder = f'{config["result_folder"]}/{phase}'
         orcascore_folder = config['orca_folder']
         netA_folder = config['cytran']['net_A_folder']
         netB_folder = config['cytran']['net_B_folder']

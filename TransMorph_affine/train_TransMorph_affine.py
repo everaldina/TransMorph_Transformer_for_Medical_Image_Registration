@@ -102,7 +102,7 @@ def main():
     
     img_dir = os.path.join(model_dir, 'images')
     if not os.path.exists(img_dir):
-        os.makedirs(model_dir)
+        os.makedirs(img_dir)
     
     batch_size = args.batch_size
     lr = args.lr

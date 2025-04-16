@@ -1,9 +1,9 @@
 {
-    "result_folder": "/workspace/data/orCaScore/vit-v-net/",
-    "split_path": "/workspace/data/orCaScore/cytran/",
-    "orca_folder": "/workspace/data/orCaScore/Challenge_data/Training_set/Images",
+    "result_folder": "/workspace/repositorio/data/data_set/T64_transformed_min",
+    "split_path": "/workspace/orcascore/datasplits/transmorph",
+    "orca_folder": "/workspace/orcascore/data/aligned",
     "cytran": {
-        "net_A_folder": null,
+        "net_A_folder": "/workspace/orcascore/data/aligned_orca_cytran",
         "net_B_folder": null
     },
     "train": "T64_transformed",
