@@ -18,14 +18,14 @@ def get_image_array(image_path):
 
     return ct_scan
 
-def save_pkl(x_image, y_image, save_path, normalize=True, padding = None):
+def save_pkl(x_image, y_image, save_path, normalize=True, padding_mode = None, result_slices = None):
     data = {}
     if normalize:
         x_image = normalize_image(x_image)
         y_image = normalize_image(y_image)
         
-    if padding is not None:
-        x_image, y_image, add_str, add_end = crop_img(x_image, y_image, padding)
+    if padding_mode is not None:
+        x_image, y_image, add_str, add_end = pad_img(x_image, y_image, padding_mode, result_slices)
         data['padding_start'] = add_str
         data['padding_end'] = add_end
         
@@ -57,7 +57,7 @@ def normal2normal(ids, ct_type, moved, fixed, result_folder, orca_folder):
         y_image = get_image_array(y_path)
         save_pkl(x_image, y_image, os.path.join(result_folder, f"{i}.pkl"))
 
-def normalized2normalized(ids, ct_type, moved, fixed, result_folder, orca_folder, result_slices):
+def normalized2normalized(ids, ct_type, moved, fixed, result_folder, orca_folder, padding_mode=None, result_slices=None):
     for i in ids:
         x_path = os.path.join(orca_folder, f"{i}{ct_type[moved]}.mhd")
         x_image = get_image_array(x_path)
@@ -65,15 +65,15 @@ def normalized2normalized(ids, ct_type, moved, fixed, result_folder, orca_folder
         y_path = os.path.join(orca_folder, f"{i}{ct_type[fixed]}.mhd")
         y_image = get_image_array(y_path)
         y_image = normalize_cytran(y_image)
-        save_pkl(x_image, y_image, os.path.join(result_folder, f"{i}.pkl"), padding=result_slices)
+        save_pkl(x_image, y_image, os.path.join(result_folder, f"{i}.pkl"), padding_mode=padding_mode, result_slices=result_slices)
         
-def transformed2normalized(ids, ct_type, fixed, result_folder, orca_folder, netA_folder, result_slices):
+def transformed2normalized(ids, ct_type, fixed, result_folder, orca_folder, netA_folder, padding_mode=None, result_slices=None):
     for i in ids:
         x_image = pkload(os.path.join(netA_folder, f"{i}.pkl"))
         y_path = os.path.join(orca_folder, f"{i}{ct_type[fixed]}.mhd")
         y_image = get_image_array(y_path)
         y_image = normalize_cytran(y_image)
-        save_pkl(x_image, y_image, os.path.join(result_folder, f"{i}.pkl"), padding=result_slices)
+        save_pkl(x_image, y_image, os.path.join(result_folder, f"{i}.pkl"), result_slices=result_slices)
         
 def normal2transformed(ids, ct_type, moved, result_folder, orca_folder, netB_folder):
     for i in ids:
@@ -140,20 +140,27 @@ def normalize_image(image):
     normalized_array = (image - array_min) / (array_max - array_min)
     return normalized_array
 
-def crop_img(image, size):
-    pass
 
-def crop_img(x_image, y_image, result_size):
+def pad_img(x_image, y_image, padding_mode, result_size):
     diff = result_size - x_image.shape[0]
     start_add = ceil(diff / 2)
     end_add = floor(diff / 2)
+    
+    if padding_mode == 'min_value':
+        start_pad_x = np.repeat(np.min(x_image), start_add, axis=0)
+        end_pad_x = np.repeat(np.min(x_image), end_add, axis=0)
+        start_pad_y = np.repeat(np.min(y_image), start_add, axis=0)
+        end_pad_y = np.repeat(np.min(y_image), end_add, axis=0)
+    elif padding_mode == 'slices':
+        start_pad_x = np.repeat(x_image[0:1, :, :], start_add, axis=0)
+        end_pad_x = np.repeat(x_image[-1:, :, :], end_add, axis=0)
+        start_pad_y = np.repeat(y_image[0:1, :, :], start_add, axis=0)
+        end_pad_y = np.repeat(y_image[-1:, :, :], end_add, axis=0)
+    else:
+        raise ValueError("Invalid padding mode. Use 'min_value' or 'slices'.")
 
-    start_pad = np.repeat(x_image[0:1, :, :], start_add, axis=0)
-    end_pad = np.repeat(x_image[-1:, :, :], end_add, axis=0)
-    x_image_cropped = np.concatenate([start_pad, x_image, end_pad], axis=0)
-
-    start_pad_y = np.repeat(y_image[0:1, :, :], start_add, axis=0)
-    end_pad_y = np.repeat(y_image[-1:, :, :], end_add, axis=0)
+        
+    x_image_cropped = np.concatenate([start_pad_x, x_image, end_pad_x], axis=0)
     y_image_cropped = np.concatenate([start_pad_y, y_image, end_pad_y], axis=0)
     
     return x_image_cropped, y_image_cropped, start_add, end_add
@@ -195,13 +202,13 @@ def main(config):
                     x = 64 CTAI, normalizados pelo normilized_cytran
                     y = 64 CTI, normalizados pelo normilized_cytran
                 '''
-                normalized2normalized(ids, ct_type, moved, fixed, result_folder, orcascore_folder, config["result_slices"])
+                normalized2normalized(ids, ct_type, moved, fixed, result_folder, orcascore_folder, config["padding_mode"], config["result_slices"])
             case 'T64_transformed':
                 '''
                     x = 64 CTAI, com mudança de estilo cytran
                     y = 64 CTI, normalizados pelo normilized_cytran
                 '''
-                transformed2normalized(ids, ct_type, fixed, result_folder, orcascore_folder, netA_folder, config["result_slices"])
+                transformed2normalized(ids, ct_type, fixed, result_folder, orcascore_folder, netA_folder, config["padding_mode"], config["result_slices"])
             # case 'T128': 
             #     '''64 pares de imagem T64_normal + 64 pares de imagem T64_transformed'''
             #     fA = f'{config['result_folder']}/T64_normal/{phase}'

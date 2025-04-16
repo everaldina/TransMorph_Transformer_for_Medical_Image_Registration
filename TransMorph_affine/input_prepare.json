@@ -8,5 +8,7 @@
     },
     "train": "T64_transformed",
     "_train_options": ["T64_normalized", "T64_transformed", "T128_normalized"],
-    "result_slices": 64
+    "result_slices": 64,
+    "padding_mode": "min_value",
+    "_padding_mode": ["min_value", "slices"]
 }
