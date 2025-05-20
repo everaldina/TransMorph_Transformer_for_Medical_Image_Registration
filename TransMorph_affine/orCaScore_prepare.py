@@ -6,7 +6,6 @@ import shutil
 import json
 from math import ceil, floor
 import numpy as np
-import nibabel as nib
 from utils.file_utils import json_load, pkload, save_pickle
 
 def get_image_array(image_path):
@@ -20,13 +19,15 @@ def get_image_array(image_path):
 
     return ct_scan
 
-def save(x_image, y_image, save_path, normalize=True, padding_mode = None, result_slices = None):
+def save(x_image, y_image, save_path, normalize=True, padding_mode = None, result_slices = None, artery_image = None):
     data = {}
     if normalize:
         x_image = normalize_image(x_image)
         y_image = normalize_image(y_image)
         
     if padding_mode is not None:
+        if result_slices is None:
+            raise ValueError("result_slices must be provided when padding_mode is not None.")
         x_image, y_image, add_str, add_end = pad_img(x_image, y_image, padding_mode, result_slices)
         data['padding_start'] = add_str
         data['padding_end'] = add_end
@@ -34,6 +35,11 @@ def save(x_image, y_image, save_path, normalize=True, padding_mode = None, resul
         
     data['moved'] = x_image
     data['fixed'] = y_image
+    
+    if artery_image is not None:
+        data['artery'] = pad_img(artery_image, artery_image, padding_mode, result_slices)[0]
+    else:
+        data['artery'] = None   
     save_pickle(save_path, data)
         
 
@@ -54,8 +60,12 @@ def normalized2normalized(ids, config, ct_type, result_folder):
         y_path = os.path.join(orca_folder, f"{i}{ct_type[config['fixed']]}.mhd")
         y_image = get_image_array(y_path)
         y_image = normalize_cytran(y_image)
+        if config['has_arteries_labels']:
+            artery_path = os.path.join(orca_folder, f"{i}{ct_type['LABEL_ARTERY']}.nii.gz")
+            artery_image = sitk.GetArrayFromImage(sitk.ReadImage(artery_path))
+            
         save(x_image, y_image, os.path.join(result_folder, f"{i}.pkl"), padding_mode=padding_mode, 
-                 result_slices=result_slices)
+                 result_slices=result_slices, artery_image=artery_image)
         
 def transformed2normalized(ids, config, ct_type, result_folder):
     orca_folder = config['orca_folder']
@@ -67,8 +77,12 @@ def transformed2normalized(ids, config, ct_type, result_folder):
         y_path = os.path.join(orca_folder, f"{i}{ct_type[config['fixed']]}.mhd")
         y_image = get_image_array(y_path)
         y_image = normalize_cytran(y_image)
+        if config['has_arteries_labels']:
+            artery_path = os.path.join(orca_folder, f"{i}{ct_type['LABEL_ARTERY']}.nii.gz")
+            artery_image = sitk.GetArrayFromImage(sitk.ReadImage(artery_path))
         save(x_image, y_image, os.path.join(result_folder, f"{i}.pkl"), 
-                 padding_mode=padding_mode, result_slices=result_slices)
+             padding_mode=padding_mode, result_slices=result_slices,
+             artery_image=artery_image)
     
 def fuse_splits(folderA, folderB, result_folder, suffixA = "A", suffixB = "B"):
     # TODO: Verificar como fica como os labels de arterias
@@ -120,9 +134,9 @@ def pad_img(x_image, y_image, padding_mode, result_size):
     
     if padding_mode == 'min_value':
         min_x = np.full(x_image.shape[1:], np.min(x_image))
-        min_y = np.full(y_image.shape[1:], np.min(y_image))
         start_pad_x = np.repeat(min_x, start_add, axis=0)
         end_pad_x = np.repeat(min_x, end_add, axis=0)
+        min_y = np.full(y_image.shape[1:], np.min(y_image))
         start_pad_y = np.repeat(min_y, start_add, axis=0)
         end_pad_y = np.repeat(min_y, end_add, axis=0)
     elif padding_mode == 'slices':
@@ -144,9 +158,6 @@ def main(config):
     phases = ['train', 'test']
     for phase in phases:
         result_folder = f'{config["result_folder"]}/{phase}'
-        orcascore_folder = config['orca_folder']
-        netA_folder = config['cytran']['net_A_folder']
-        netB_folder = config['cytran']['net_B_folder']
         
         # deve conter um train_data.csv e test.csv
         split_path = f'{config["split_path"]}/{phase}_data.csv'
@@ -175,7 +186,7 @@ def main(config):
                     x = 64 CTAI, com mudança de estilo cytran
                     y = 64 CTI, normalizados pelo normilized_cytran
                 '''
-                transformed2normalized(ids, config, ct_type,  result_folder, orcascore_folder, netA_folder)
+                transformed2normalized(ids, config, ct_type, result_folder)
 
             case 'T128_normalized':
                 '''64 pares de imagem T64_normalized + 64 pares de imagem T64_transformed'''
