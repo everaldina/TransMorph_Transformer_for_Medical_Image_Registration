@@ -6,6 +6,8 @@ import shutil
 import json
 from math import ceil, floor
 import numpy as np
+import nibabel as nib
+from utils.file_utils import json_load, pkload, save_pickle
 
 def get_image_array(image_path):
     '''This funciton reads a '.mhd' file using SimpleITK and return the image array, origin and spacing of the image.'''
@@ -18,7 +20,7 @@ def get_image_array(image_path):
 
     return ct_scan
 
-def save_pkl(x_image, y_image, save_path, normalize=True, padding_mode = None, result_slices = None):
+def save(x_image, y_image, save_path, normalize=True, padding_mode = None, result_slices = None):
     data = {}
     if normalize:
         x_image = normalize_image(x_image)
@@ -32,64 +34,44 @@ def save_pkl(x_image, y_image, save_path, normalize=True, padding_mode = None, r
         
     data['moved'] = x_image
     data['fixed'] = y_image
-    with open(save_path, 'wb') as f:
-        pickle.dump(data, f)
+    save_pickle(save_path, data)
         
-def json_load(fname):  
-    with open(fname) as json_file:
-        json_data = json.load(json_file)
-        return json_data
 
-def pkload(fname):
-    with open(fname, 'rb') as f:
-        return pickle.load(f)
 
 def get_ids(split_path):
     id_list = pd.read_csv(split_path)
     id_list = list(id_list.iloc[:, 0])
     return id_list
 
-def normal2normal(ids, ct_type, moved, fixed, result_folder, orca_folder):
+def normalized2normalized(ids, config, ct_type, result_folder):
+    orca_folder = config['orca_folder']
+    padding_mode = config.get('padding_mode')
+    result_slices = config.get('result_slices')
     for i in ids:
-        x_path = os.path.join(orca_folder, f"{i}{ct_type[moved]}.mhd")
-        x_image = get_image_array(x_path)
-        y_path = os.path.join(orca_folder, f"{i}{ct_type[fixed]}.mhd")
-        y_image = get_image_array(y_path)
-        save_pkl(x_image, y_image, os.path.join(result_folder, f"{i}.pkl"))
-
-def normalized2normalized(ids, ct_type, moved, fixed, result_folder, orca_folder, padding_mode=None, result_slices=None):
-    for i in ids:
-        x_path = os.path.join(orca_folder, f"{i}{ct_type[moved]}.mhd")
+        x_path = os.path.join(orca_folder, f"{i}{ct_type[config['moved']]}.mhd")
         x_image = get_image_array(x_path)
         x_image = normalize_cytran(x_image)
-        y_path = os.path.join(orca_folder, f"{i}{ct_type[fixed]}.mhd")
+        y_path = os.path.join(orca_folder, f"{i}{ct_type[config['fixed']]}.mhd")
         y_image = get_image_array(y_path)
         y_image = normalize_cytran(y_image)
-        save_pkl(x_image, y_image, os.path.join(result_folder, f"{i}.pkl"), padding_mode=padding_mode, result_slices=result_slices)
+        save(x_image, y_image, os.path.join(result_folder, f"{i}.pkl"), padding_mode=padding_mode, 
+                 result_slices=result_slices)
         
-def transformed2normalized(ids, ct_type, fixed, result_folder, orca_folder, netA_folder, padding_mode=None, result_slices=None):
+def transformed2normalized(ids, config, ct_type, result_folder):
+    orca_folder = config['orca_folder']
+    padding_mode = config.get('padding_mode')
+    result_slices = config.get('result_slices')
+    netA_folder = config['cytran']['net_A_folder']
     for i in ids:
         x_image = pkload(os.path.join(netA_folder, f"{i}.pkl"))
-        y_path = os.path.join(orca_folder, f"{i}{ct_type[fixed]}.mhd")
+        y_path = os.path.join(orca_folder, f"{i}{ct_type[config['fixed']]}.mhd")
         y_image = get_image_array(y_path)
         y_image = normalize_cytran(y_image)
-        save_pkl(x_image, y_image, os.path.join(result_folder, f"{i}.pkl"), padding_mode=padding_mode, result_slices=result_slices)
-        
-def normal2transformed(ids, ct_type, moved, result_folder, orca_folder, netB_folder):
-    for i in ids:
-        x_path = os.path.join(orca_folder, f"{i}{ct_type[moved]}.mhd")
-        x_image = get_image_array(x_path)
-        x_image = normalize_cytran(x_image)
-        y_image = pkload(os.path.join(netB_folder, f"{i}.pkl"))
-        save_pkl(x_image, y_image, os.path.join(result_folder, f"{i}_NT.pkl"))
-
-def transformed2transformed(ids, result_folder, netA_folder, netB_folder):
-    for i in ids:
-        x_image = pkload(os.path.join(netA_folder, f"{i}.pkl"))
-        y_image = pkload(os.path.join(netB_folder, f"{i}.pkl"))
-        save_pkl(x_image, y_image, os.path.join(result_folder, f"{i}_TT.pkl"))
+        save(x_image, y_image, os.path.join(result_folder, f"{i}.pkl"), 
+                 padding_mode=padding_mode, result_slices=result_slices)
     
 def fuse_splits(folderA, folderB, result_folder, suffixA = "A", suffixB = "B"):
+    # TODO: Verificar como fica como os labels de arterias
     if not os.path.exists(result_folder):
         os.makedirs(result_folder)
 
@@ -113,16 +95,6 @@ def fuse_splits(folderA, folderB, result_folder, suffixA = "A", suffixB = "B"):
             origem = os.path.join(folderB, filename)
             destino = os.path.join(result_folder, novo_nome)
             # Move o arquivo
-            shutil.copy(origem, destino)
-            
-def copy_split(origin, destination):
-    if not os.path.exists(destination):
-        os.makedirs(destination)
-    
-    for filename in os.listdir(origin):
-        if filename.endswith('.pkl'):
-            origem = os.path.join(origin, filename)
-            destino = os.path.join(destination, filename)
             shutil.copy(origem, destino)
 
 
@@ -182,45 +154,35 @@ def main(config):
         if not os.path.exists(result_folder):
             os.makedirs(result_folder)
         
-        moved = 'ARTERIAL'
-        fixed = 'NATIVE'
         ct_type = {
             'ARTERIAL': 'CTAI',
-            'NATIVE': 'CTI'
+            'NATIVE': 'CTI',
+            'LABEL_ARTERY': 'Artery'
         }
         
         ids = get_ids(split_path)
         
         # T64 normal
         match (mode):
-            # case 'T64_normal':
-            #     '''
-            #         x = 64 CTAI
-            #         y = 64 CTI
-            #     '''
-            #     normal2normal(ids, ct_type, moved, fixed, result_folder, orcascore_folder)
             case 'T64_normalized':
                 '''
                     x = 64 CTAI, normalizados pelo normilized_cytran
                     y = 64 CTI, normalizados pelo normilized_cytran
                 '''
-                normalized2normalized(ids, ct_type, moved, fixed, result_folder, orcascore_folder, config["padding_mode"], config["result_slices"])
+                normalized2normalized(ids, config, ct_type, result_folder)
             case 'T64_transformed':
                 '''
                     x = 64 CTAI, com mudança de estilo cytran
                     y = 64 CTI, normalizados pelo normilized_cytran
                 '''
-                transformed2normalized(ids, ct_type, fixed, result_folder, orcascore_folder, netA_folder, config["padding_mode"], config["result_slices"])
-            # case 'T128': 
-            #     '''64 pares de imagem T64_normal + 64 pares de imagem T64_transformed'''
-            #     fA = f'{config['result_folder']}/T64_normal/{phase}'
-            #     fB = f'{config['result_folder']}/T64_transformed/{phase}'
-            #     fuse_splits(fA, fB, result_folder, suffixA = "N", suffixB = "T")
+                transformed2normalized(ids, config, ct_type,  result_folder, orcascore_folder, netA_folder)
+
             case 'T128_normalized':
                 '''64 pares de imagem T64_normalized + 64 pares de imagem T64_transformed'''
                 fA = f'{config["result_folder"]}/T64_normalized/{phase}'
                 fB = f'{config["result_folder"]}/T64_transformed/{phase}'
                 fuse_splits(fA, fB, result_folder, suffixA = "N", suffixB = "T")
+            
             case _:
                 print("Invalid mode")
     

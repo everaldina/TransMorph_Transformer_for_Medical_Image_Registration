@@ -1,13 +1,9 @@
-import math
 import numpy as np
 import torch.nn.functional as F
-import torch, sys
+import torch
 from torch import nn
 import pystrum.pynd.ndutils as nd
 from scipy.ndimage import gaussian_filter
-import os
-import pickle
-
 class AverageMeter(object):
     """Computes and stores the average and current value"""
     def __init__(self):
@@ -191,11 +187,6 @@ def process_label():
         seg_i += 1
     return dict
 
-def write2csv(line, name):
-    with open(name+'.csv', 'a') as file:
-        file.write(line)
-        file.write('\n')
-
 def dice_val_substruct(y_pred, y_true, std_idx):
     with torch.no_grad():
         y_pred = nn.functional.one_hot(y_pred, num_classes=46)
@@ -352,20 +343,7 @@ def uceloss(errors, uncert, n_bins=15, outlier=0.0, range=None):
     prop_in_bin = torch.tensor(prop_in_bin_list, device=device)
 
     return uce, err_in_bin, avg_uncert_in_bin, prop_in_bin
-
-class Logger(object):
-    def __init__(self, save_dir, file_name='logfile.log'):
-        self.terminal = sys.stdout
-        self.log = open(os.path.join(save_dir, file_name), "a", buffering=1)
-
-    def write(self, message):
-        self.terminal.write(message)
-        self.log.write(message)
-
-    def flush(self):
-        self.terminal.flush()
-        self.log.flush()
-        
+   
         
 def load_model(path):
     try: 
@@ -379,7 +357,3 @@ def load_model(path):
         optimizer = None
     
     return model, optimizer
-
-def save_pickle(path, data):
-    with open(path, 'wb') as f:
-        pickle.dump(data, f)

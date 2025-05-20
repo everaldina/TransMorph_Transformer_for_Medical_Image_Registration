@@ -10,5 +10,9 @@
     "_train_options": ["T64_normalized", "T64_transformed", "T128_normalized"],
     "result_slices": 64,
     "padding_mode": "min_value",
-    "_padding_mode": ["min_value", "slices"]
+    "_padding_mode": ["min_value", "slices"],
+    "moved": "ARTERIAL",
+    "fixed": "NATIVE",
+    "_moved|fixed": ["ARTERIAL", "NATIVE"],
+    "has_arteries_labels": true
 }

@@ -1,4 +1,4 @@
-import os, utils, glob, metrics
+import os, glob, metrics
 from torch.utils.data import DataLoader
 from data import datasets, trans
 import numpy as np
@@ -8,6 +8,8 @@ from models.TransMorph_affine import CONFIGS as CONFIGS_TM
 import models.TransMorph_affine as TransMorph
 import torch.nn as nn
 import argparse
+from utils.file_utils import save_pickle
+from utils.model_utils import load_model
 
 import pandas as pd
 
@@ -44,7 +46,6 @@ def main():
         os.makedirs(infer_dir)
 
     # Initialize model
-    # TODO: Pensar em como setar h, w, d
     H, W, D = 64, 512, 512
     config = CONFIGS_TM['TransMorph_Affine']
     config.img_size = (H, W, D)
@@ -53,7 +54,7 @@ def main():
     model = TransMorph.TransMorphAffine(config)
     affine_trans = TransMorph.AffineTransform()#AffineTransformer((H, W, D)).cuda()
     
-    best_model, _ = utils.load_model(os.path.join(model_dir, f'epc_{epoch}.pth.tar'))
+    best_model, _ = load_model(os.path.join(model_dir, f'epc_{epoch}.pth.tar'))
     print(f'Model: epc_{epoch}.pth.tar loaded!')
     model.load_state_dict(best_model)
     model.cuda()
@@ -95,7 +96,7 @@ def main():
                     },
                     'y': y.detach().cpu().squeeze().numpy()
                 }
-                utils.save_pickle(os.path.join(infer_dir, f'{id_name}.pkl'), save_file)
+                save_pickle(os.path.join(infer_dir, f'{id_name}.pkl'), save_file)
                 
             if calc_padding:
                 padding_start = data['padding_start']
