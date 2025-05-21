@@ -147,12 +147,13 @@ def pad_img(x_image, y_image, padding_mode, result_size):
     end_add = floor(diff / 2)
     
     if padding_mode == 'min_value':
-        min_x = np.full(x_image.shape[1:], np.min(x_image))
-        min_y = np.full(y_image.shape[1:], np.min(y_image))
+        min_x = np.full((1, 512, 512), np.min(x_image))
+        min_y = np.full((1, 512, 512), np.min(y_image))
         start_pad_x = np.repeat(min_x, start_add, axis=0)
         end_pad_x = np.repeat(min_x, end_add, axis=0)
         start_pad_y = np.repeat(min_y, start_add, axis=0)
         end_pad_y = np.repeat(min_y, end_add, axis=0)
+        print(start_pad_x.shape, start_pad_y.shape)
     elif padding_mode == 'slices':
         start_pad_x = np.repeat(x_image[0:1, :, :], start_add, axis=0)
         end_pad_x = np.repeat(x_image[-1:, :, :], end_add, axis=0)
