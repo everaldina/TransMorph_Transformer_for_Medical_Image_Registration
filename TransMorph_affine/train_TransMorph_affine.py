@@ -1,4 +1,4 @@
-import os, utils, glob, losses, random, math
+import os, glob, losses, random, math
 import sys
 from torch.utils.data import DataLoader
 from data import datasets, trans
@@ -15,6 +15,8 @@ import torch.nn as nn
 import argparse
 from skimage.metrics import structural_similarity as ssim
 from datetime import datetime
+from utils.logger import Logger
+from utils.model_utils import load_model
 
 def affine_aug(im, im_label=None, seed=10):
     # mode = 'bilinear' or 'nearest'
@@ -113,7 +115,7 @@ def main():
     log_dir = os.path.join('logs', save_dir)
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
-    sys.stdout = utils.Logger(log_dir, f"logfile_epoch_str{epoch_start}.log")
+    sys.stdout = Logger(log_dir, f"logfile_epoch_str{epoch_start}.log")
     sys.stderr = sys.stdout
     
     
@@ -136,7 +138,7 @@ def main():
             raise Exception('Set a model to load')
         # updated_lr = round(lr * np.power(1 - (epoch_start) / max_epoch, 0.9),8)
         # best_model = torch.load(model_dir + natsorted(os.listdir(model_dir))[-1])['state_dict']
-        best_model, epoch_optimizer = utils.load_model(os.path.join(model_dir, f' epc_{epoch_start}.pth.tar'))
+        best_model, epoch_optimizer = load_model(os.path.join(model_dir, f' epc_{epoch_start}.pth.tar'))
         print(f'Model: epc_{epoch_start}.pth.tar loaded!')
         model.load_state_dict(best_model)
         optimizer.load_state_dict(epoch_optimizer)

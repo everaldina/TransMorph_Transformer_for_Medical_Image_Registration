@@ -5,6 +5,7 @@ from .data_utils import pkload
 import matplotlib.pyplot as plt
 
 import numpy as np
+import nibabel as nib
 
 
 class IXIBrainDataset(Dataset):
@@ -102,7 +103,8 @@ class OrCaScoreDataSet(Dataset):
                     'y': y, 
                     'id_image': id_image,
                     'padding_start': pickle_data['padding_start'],
-                    'padding_end': pickle_data['padding_end'] 
+                    'padding_end': pickle_data['padding_end'] ,
+                    'artery': pickle_data['artery'],
                 }
 
     def __len__(self):

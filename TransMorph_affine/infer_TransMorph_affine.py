@@ -1,4 +1,4 @@
-import os, utils, glob, metrics
+import os, glob, metrics
 from torch.utils.data import DataLoader
 from data import datasets, trans
 import numpy as np
@@ -8,6 +8,8 @@ from models.TransMorph_affine import CONFIGS as CONFIGS_TM
 import models.TransMorph_affine as TransMorph
 import torch.nn as nn
 import argparse
+from utils.file_utils import save_pickle
+from utils.model_utils import load_model
 
 import pandas as pd
 
@@ -20,13 +22,21 @@ def args_input():
     parser.add_argument('--no_save_infer', action='store_true', help="flag for not saving infered results")
     parser.add_argument('--train_infer', action='store_true', help="eval train images. infered train images will not be saved")
     parser.add_argument('--calc_padding', action='store_true', help="flag for calculating results without padding slices")
+    parser.add_argument('--has_artery_label', action='store_true', help="flag for using artery label")
     return parser.parse_args()
+
+def get_clean_data(data, padding_start, padding_end, total_slices=64, mode='cuda'):
+    if mode == 'cuda':
+        return data[:, :, padding_start:(total_slices-padding_end+1), :, :]
+    if mode == 'cpu':
+        return data[padding_start:(total_slices-padding_end+1), :, :]
 
 def main():
     args = args_input()
     
     train_infer = args.train_infer
     no_save = args.no_save_infer
+    has_arteries = args.has_artery_label
 
     if train_infer:
         train_dir = args.train_dir
@@ -44,7 +54,6 @@ def main():
         os.makedirs(infer_dir)
 
     # Initialize model
-    # TODO: Pensar em como setar h, w, d
     H, W, D = 64, 512, 512
     config = CONFIGS_TM['TransMorph_Affine']
     config.img_size = (H, W, D)
@@ -53,7 +62,7 @@ def main():
     model = TransMorph.TransMorphAffine(config)
     affine_trans = TransMorph.AffineTransform()#AffineTransformer((H, W, D)).cuda()
     
-    best_model, _ = utils.load_model(os.path.join(model_dir, f'epc_{epoch}.pth.tar'))
+    best_model, _ = load_model(os.path.join(model_dir, f'epc_{epoch}.pth.tar'))
     print(f'Model: epc_{epoch}.pth.tar loaded!')
     model.load_state_dict(best_model)
     model.cuda()
@@ -80,34 +89,40 @@ def main():
             
             aff, scl, transl, shr = model((x, y))
             x_trans, mat, inv_mat = affine_trans(x, aff, scl, transl, shr)
+            if has_arteries:
+                artery_lbl = data['artery'].cuda()
+                artery_trans = affine_trans.apply_affine(artery_lbl, mat)
             
             infer_data.append(metrics.calc_metrics(id_name, x, y, x_trans, y))
             
             if not no_save:
                 save_file = {
-                    'x': x.detach().cpu().squeeze().numpy(),
-                    'x_trans': x_trans.detach().cpu().squeeze().numpy(),
+                    'x': get_clean_data(x.detach().cpu().squeeze().numpy(), padding_start, padding_end, mode='cpu'),
+                    'x_trans': get_clean_data(x_trans.detach().cpu().squeeze().numpy(), padding_start, padding_end, mode='cpu'),
                     'transformation': {
                         'aff': aff.detach().cpu().squeeze().numpy(),
                         'scl': scl.detach().cpu().squeeze().numpy(),
                         'transl': transl.detach().cpu().squeeze().numpy(),
                         'shr': shr.detach().cpu().squeeze().numpy()
                     },
-                    'y': y.detach().cpu().squeeze().numpy()
+                    'y': get_clean_data(y.detach().cpu().squeeze().numpy(), padding_start, padding_end, mode='cpu')
                 }
-                utils.save_pickle(os.path.join(infer_dir, f'{id_name}.pkl'), save_file)
+                if has_arteries:
+                    save_file['artery'] = get_clean_data(artery_lbl.detach().cpu().squeeze().numpy(), padding_start, padding_end, mode='cpu')
+                
+                save_pickle(os.path.join(infer_dir, f'{id_name}.pkl'), save_file)
                 
             if calc_padding:
                 padding_start = data['padding_start']
                 padding_end = data['padding_end']
                 
                 print(padding_start, padding_end)
-                x_og =  x[:, :, padding_start:63-padding_end+1, :, :]
-                y_og = y[:, :, padding_start:63-padding_end+1, :, :]
+                x_og =  get_clean_data(x, padding_start, padding_end)
+                y_og = get_clean_data(y, padding_start, padding_end)
                 print(x_og.shape, y_og.shape)
                 
                 # Calculating metrics without padding
-                x_trans_clean = x_trans[:, :, padding_start:63-padding_end+1, :, :]
+                x_trans_clean = get_clean_data(x_trans, padding_start, padding_end)
                 clean_data.append(metrics.calc_metrics(id_name, x_og, y_og, x_trans_clean, y_og))
 
     if calc_padding:
