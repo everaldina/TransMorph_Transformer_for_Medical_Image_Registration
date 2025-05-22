@@ -95,6 +95,8 @@ def main():
             
             infer_data.append(metrics.calc_metrics(id_name, x, y, x_trans, y))
             
+            padding_start = data['padding_start']
+            padding_end = data['padding_end']
             if not no_save:
                 save_file = {
                     'x': get_clean_data(x.detach().cpu().squeeze().numpy(), padding_start, padding_end, mode='cpu'),
@@ -113,10 +115,6 @@ def main():
                 save_pickle(os.path.join(infer_dir, f'{id_name}.pkl'), save_file)
                 
             if calc_padding:
-                padding_start = data['padding_start']
-                padding_end = data['padding_end']
-                
-                print(padding_start, padding_end)
                 x_og =  get_clean_data(x, padding_start, padding_end)
                 y_og = get_clean_data(y, padding_start, padding_end)
                 print(x_og.shape, y_og.shape)

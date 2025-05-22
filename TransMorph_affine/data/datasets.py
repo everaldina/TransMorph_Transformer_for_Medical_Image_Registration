@@ -104,7 +104,7 @@ class OrCaScoreDataSet(Dataset):
                     'id_image': id_image,
                     'padding_start': pickle_data['padding_start'],
                     'padding_end': pickle_data['padding_end'] ,
-                    'artery': pickle_data['artery'],
+                    'artery': torch.from_numpy(pickle_data['artery'][None, ...]).float(),
                 }
 
     def __len__(self):
