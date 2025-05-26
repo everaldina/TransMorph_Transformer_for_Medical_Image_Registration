@@ -825,9 +825,9 @@ class AffineTransform(nn.Module):
         super().__init__()
         self.mode = mode
 
-    def apply_affine(self, src, mat):
+    def apply_affine(self, src, mat, mode):
         grid = nnf.affine_grid(mat, [src.shape[0], 3, src.shape[2], src.shape[3], src.shape[4]], align_corners=False)
-        return nnf.grid_sample(src, grid, align_corners=False, mode=self.mode)
+        return nnf.grid_sample(src, grid, align_corners=False, mode=mode)
 
     def forward(self, src, affine, scale, translate, shear):
 
