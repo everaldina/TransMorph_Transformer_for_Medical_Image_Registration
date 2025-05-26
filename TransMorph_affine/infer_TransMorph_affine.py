@@ -25,11 +25,11 @@ def args_input():
     parser.add_argument('--has_artery_label', action='store_true', help="flag for using artery label")
     return parser.parse_args()
 
-def get_clean_data(data, padding_start, padding_end, total_slices=64, mode='cuda'):
+def get_clean_data(data, padding_start, padding_end, mode='cuda'):
     if mode == 'cuda':
-        return data[:, :, padding_start:(total_slices-padding_end+1), :, :]
+        return data[:, :, padding_start:-padding_end, :, :]
     if mode == 'cpu':
-        return data[padding_start:(total_slices-padding_end+1), :, :]
+        return data[padding_start:-padding_end, :, :]
 
 def main():
     args = args_input()
@@ -110,7 +110,7 @@ def main():
                     'y': get_clean_data(y.detach().cpu().squeeze().numpy(), padding_start, padding_end, mode='cpu')
                 }
                 if has_arteries:
-                    save_file['artery'] = get_clean_data(artery_lbl.detach().cpu().squeeze().numpy(), padding_start, padding_end, mode='cpu')
+                    save_file['artery'] = get_clean_data(artery_trans.detach().cpu().squeeze().numpy(), padding_start, padding_end, mode='cpu')
                 
                 save_pickle(os.path.join(infer_dir, f'{id_name}.pkl'), save_file)
                 

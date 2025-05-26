@@ -62,7 +62,7 @@ def normalized2normalized(ids, config, ct_type, result_folder):
         y_image = normalize_cytran(y_image)
         if config['has_arteries_labels']:
             artery_path = os.path.join(orca_folder, f"{i}{ct_type['LABEL_ARTERY']}.mhd")
-            artery_image = sitk.GetArrayFromImage(sitk.ReadImage(artery_path))
+            artery_image = get_image_array(artery_path)
             
         save(x_image, y_image, os.path.join(result_folder, f"{i}.pkl"), padding_mode=padding_mode, 
                  result_slices=result_slices, artery_image=artery_image)
