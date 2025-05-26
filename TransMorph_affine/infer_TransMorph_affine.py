@@ -91,7 +91,7 @@ def main():
             x_trans, mat, inv_mat = affine_trans(x, aff, scl, transl, shr)
             if has_arteries:
                 artery_lbl = data['artery'].cuda()
-                artery_trans = affine_trans.apply_affine(artery_lbl, mat)
+                artery_trans = affine_trans.apply_affine(artery_lbl, mat, 'nearest')
             
             infer_data.append(metrics.calc_metrics(id_name, x, y, x_trans, y))
             
