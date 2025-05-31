@@ -99,12 +99,19 @@ class OrCaScoreDataSet(Dataset):
         x = np.ascontiguousarray(x)# [Bsize,channelsHeight,,Width,Depth]
         y = np.ascontiguousarray(y)
         x, y = torch.from_numpy(x), torch.from_numpy(y)
+        
+        if 'artery' in pickle_data:
+            if pickle_data['artery'] is not None:
+                 artery = pickle_data['artery'][None, ...]
+            else:
+                artery = np.zeros((1, x.shape[2], x.shape[3], x.shape[4]), dtype=np.float32)
+        
         return {    'x': x, 
                     'y': y, 
                     'id_image': id_image,
                     'padding_start': pickle_data['padding_start'],
                     'padding_end': pickle_data['padding_end'] ,
-                    'artery': torch.from_numpy(pickle_data['artery'][None, ...]).float(),
+                    'artery': torch.from_numpy(artery).float(),
                 }
 
     def __len__(self):
