@@ -119,7 +119,6 @@ def main():
             if calc_padding:
                 x_og =  get_clean_data(x, padding_start, padding_end)
                 y_og = get_clean_data(y, padding_start, padding_end)
-                print(x_og.shape, y_og.shape)
                 
                 # Calculating metrics without padding
                 x_trans_clean = get_clean_data(x_trans, padding_start, padding_end)
