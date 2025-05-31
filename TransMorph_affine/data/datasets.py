@@ -102,9 +102,9 @@ class OrCaScoreDataSet(Dataset):
         
         if 'artery' in pickle_data:
             if pickle_data['artery'] is not None:
-                 artery = pickle_data['artery'][None, ...]
+                artery = pickle_data['artery'][None, ...]
             else:
-                artery = np.zeros((1, x.shape[2], x.shape[3], x.shape[4]), dtype=np.float32)
+                artery = np.zeros((1, x.shape[1], x.shape[2], x.shape[3]), dtype=np.float32)
         
         return {    'x': x, 
                     'y': y, 
