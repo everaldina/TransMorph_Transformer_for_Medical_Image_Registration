@@ -23,6 +23,7 @@ def args_input():
     parser.add_argument('--train_infer', action='store_true', help="eval train images. infered train images will not be saved")
     parser.add_argument('--calc_padding', action='store_true', help="flag for calculating results without padding slices")
     parser.add_argument('--has_artery_label', action='store_true', help="flag for using artery label")
+    parser.add_argument('--save_train', action='store_true', help="flag for saving train infered results")
     return parser.parse_args()
 
 def get_clean_data(data, padding_start, padding_end, mode='cuda'):
@@ -37,6 +38,7 @@ def main():
     train_infer = args.train_infer
     no_save = args.no_save_infer
     has_arteries = args.has_artery_label
+    save_train = args.save_train
 
     if train_infer:
         train_dir = args.train_dir
@@ -149,6 +151,31 @@ def main():
                 x_trans, mat, inv_mat = affine_trans(x, aff, scl, transl, shr)
                 
                 train_data.append(metrics.calc_metrics(id_name, x, y, x_trans, y, 'train'))
+                
+                if save_train and not no_save:
+                    padding_start = data['padding_start']
+                    padding_end = data['padding_end']
+                    
+                    if has_arteries:
+                        artery_lbl = data['artery'].cuda()
+                        artery_trans = affine_trans.apply_affine(artery_lbl, mat, 'nearest')
+                    
+                    save_file = {
+                        'x': get_clean_data(x.detach().cpu().squeeze().numpy(), padding_start, padding_end, mode='cpu'),
+                        'x_trans': get_clean_data(x_trans.detach().cpu().squeeze().numpy(), padding_start, padding_end, mode='cpu'),
+                        'transformation': {
+                            'aff': aff.detach().cpu().squeeze().numpy(),
+                            'scl': scl.detach().cpu().squeeze().numpy(),
+                            'transl': transl.detach().cpu().squeeze().numpy(),
+                            'shr': shr.detach().cpu().squeeze().numpy()
+                        },
+                        'y': get_clean_data(y.detach().cpu().squeeze().numpy(), padding_start, padding_end, mode='cpu')
+                    }
+                    if has_arteries:
+                        save_file['artery'] = get_clean_data(artery_trans.detach().cpu().squeeze().numpy(), padding_start, padding_end, mode='cpu')
+                    
+                    save_pickle(os.path.join(infer_dir, f'{id_name}.pkl'), save_file)
+                        
                 
         metrics.print_metrics(train_data)
         df_infer = pd.concat([df_infer, pd.DataFrame(train_data)])
