@@ -2,6 +2,19 @@
 
 Este repositório contém a implementação do **TransMorph Affine**, um modelo baseado em Transformer para registro de imagens médicas com transformações afins. O projeto inclui scripts para treinamento, inferência, preparação de dados e avaliação de métricas.
 
+## Modelos
+Para execução de inferencias ou continuação de treinos os modelos devem estar na pasta `experiments/` com a seguinte estrutura:
+
+```
+experiments/
+    <nome_modelo>/
+        epc_<num_epoch>.pth.tar
+        ...
+```
+
+Segue link para download do modelo da epoca 500 com o treino de T64_transformed:
+- [Google Drive](https://drive.google.com/file/d/1M0oaqUBTaAfZ-GUitD6xaBgv9x6m8Xu7/view?usp=sharing)
+
 ## Preparação dos Dados
 
 Os dados devem estar no formato `.pkl` (pickle), contendo os seguintes campos obrigatórios por amostra:
@@ -98,3 +111,4 @@ Os resultados serão salvos em `experiments/<save>/infer/`, incluindo arquivos `
 ## Docker
 
 Para facilitar a execução em ambientes controlados, utilize o Dockerfile disponível em `Docker/`.
+
