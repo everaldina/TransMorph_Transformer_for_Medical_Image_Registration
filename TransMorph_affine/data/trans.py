@@ -9,6 +9,8 @@ from .rand import Constant, Uniform, Gaussian
 from scipy.ndimage import rotate
 from skimage.transform import rescale, resize
 
+from math import ceil, floor
+
 class Base(object):
     def sample(self, *shape):
         return shape
@@ -287,14 +289,21 @@ class RandomGammaCorrection(Base):
         return 'random intensity shift per channels on the input image, including'
 
 class MinMax_norm(Base):
-    def __init__(self, ):
-        a = None
+    def __init__(self, ignore_label = False):
+        self.ignore_label = ignore_label
 
     def tf(self, img, k=0):
-        if k == 1:
+        if k == 1 and self.ignore_label:
             return img
-        img = (img - img.min()) / (img.max()-img.min())
-        return img
+        
+        array_min = img.min()
+        array_max = img.max()
+        
+        denominator = array_max - array_min
+        if denominator == 0:
+            return img - array_min
+        
+        return (img - array_min) / denominator
 
 class Seg_norm(Base):
     def __init__(self, ):
@@ -345,6 +354,87 @@ class Pad(Base):
 
     def __str__(self):
         return 'Pad(({}, {}, {}))'.format(*self.pad)
+    
+class PadToSize(Base):
+    """
+    Aplica padding na primeira dimensão de dados para que ela 
+    atinja o 'result_slices'.
+
+    Assume que o input para 'tf' será (batch, slices, H, W).
+    O padding será aplicado em axis=1.
+    """
+    def __init__(self, result_slices, padding_mode='min_value', pad_axis=1):
+        """
+        Inicializa a transformação.
+        
+        Args:
+            result_slices (int): O tamanho final desejado para a dimensão de padding.
+            padding_mode (str): 'min_value' (preenche com o valor mínimo da imagem) 
+            ou 'slices' (repete a primeira/última fatia).
+        """
+        self.result_slices = result_slices
+        self.padding_mode = padding_mode
+        
+        self.start_add = 0
+        self.end_add = 0
+        
+        # Pelo fluxo do Base e do seu Dataloader, o eixo a ser "padded" será o axis=1
+        self.pad_axis = pad_axis
+
+    def sample(self, *shape):
+        """
+        Calcula a quantidade de padding necessária..
+        """
+        # shape[0] é a dimensão 'slices'
+        original_size = shape[0] 
+        
+        diff = self.result_slices - original_size
+        
+        if diff <= 0:
+            # Não precisa de padding
+            self.start_add = 0
+            self.end_add = 0
+        else:
+            self.start_add = ceil(diff / 2)
+            self.end_add = floor(diff / 2)
+
+    def tf(self, img, k=0):
+        """
+        Aplica o padding na imagem 'img'.
+        'img' terá a forma (batch, slices, H, W), ex: (1, slices, 512, 512)
+        k=0 é a imagem 'x', k=1 é a imagem 'y'.
+        """
+        
+        if self.start_add == 0 and self.end_add == 0:
+            return img
+        
+        if self.padding_mode == 'min_value':
+            min_val = np.min(img)
+            
+            pad_slice_shape = list(img.shape)
+            pad_slice_shape[self.pad_axis] = 1 
+            
+            pad_block = np.full(tuple(pad_slice_shape), min_val, dtype=img.dtype)
+
+            start_pad = np.repeat(pad_block, self.start_add, axis=self.pad_axis)
+            end_pad = np.repeat(pad_block, self.end_add, axis=self.pad_axis)
+            
+        elif self.padding_mode == 'slices':
+            start_slice = np.take(img, [0], axis=self.pad_axis)
+            end_slice = np.take(img, [-1], axis=self.pad_axis)
+            
+            start_pad = np.repeat(start_slice, self.start_add, axis=self.pad_axis)
+            end_pad = np.repeat(end_slice, self.end_add, axis=self.pad_axis)    
+        else:
+            raise ValueError(f"Invalid padding mode '{self.padding_mode}'. Use 'min_value' or 'slices'.")
+
+        # Concatena (start_pad, img, end_pad) ao longo do eixo 'slices' (axis=1)
+        padded_img = np.concatenate([start_pad, img, end_pad], axis=self.pad_axis)
+        
+        return padded_img
+
+    def __str__(self):
+        return f"PadToSize(result_slices={self.result_slices}, padding_mode='{self.padding_mode}')"
 
 class Pad3DIfNeeded(Base):
     def __init__(self, shape, value=0, mask_value=0): # [0,0,0,5,0]

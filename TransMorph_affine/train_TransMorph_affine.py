@@ -149,11 +149,17 @@ def main():
 
     # Initialize training
     # TODO: verificar modficcao vit
-    train_composed = transforms.Compose([trans.RandomFlip(0),
+    train_composed = transforms.Compose([trans.MinMax_norm(ignore_label=False),
+                                         trans.PadToSize(result_size=64, padding_mode='min_value'),
+                                         trans.RandomFlip(0),
                                          trans.NumpyType((np.float32, np.float32)),
                                          ])
 
-    val_composed = transforms.Compose([trans.NumpyType((np.float32, np.float32))])
+    val_composed = transforms.Compose([trans.MinMax_norm(ignore_label=False),
+                                        trans.PadToSize(result_size=64, padding_mode='min_value'),
+                                        trans.NumpyType((np.float32, np.float32)),
+                                        trans.PadToSize(result_size=64, padding_mode='min_value')
+                                        ])
     train_set = datasets.OrCaScoreDataSet(glob.glob(train_dir + '/*.pkl'), transforms=train_composed)
     val_set = datasets.OrCaScoreDataSet(glob.glob(val_dir + '/*.pkl'), transforms=val_composed)
     train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
