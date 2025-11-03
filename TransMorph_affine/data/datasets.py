@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 
 import numpy as np
 import nibabel as nib
-
+from math import ceil, floor
 
 class IXIBrainDataset(Dataset):
     def __init__(self, data_path, atlas_path, transforms):
@@ -100,11 +100,26 @@ class OrCaScoreDataSet(Dataset):
         y = np.ascontiguousarray(y)
         x, y = torch.from_numpy(x), torch.from_numpy(y)
         
-        if 'artery' in pickle_data:
-            if pickle_data['artery'] is not None:
-                artery = pickle_data['artery'][None, ...]
+        if 'artery' in pickle_data and pickle_data['artery'] is not None:
+            artery = pickle_data['artery'][None, ...]
+        else:
+            artery = np.zeros((1, x.shape[1], x.shape[2], x.shape[3]), dtype=np.float32)
+        
+        if 'padding_start' not in pickle_data:
+            slices_og = pickle_data['moved'].shape[0]
+            slices_new = x.shape[1]
+            
+            diff = slices_new - slices_og
+            if diff <= 0:
+                start_add = 0
+                end_add = 0
             else:
-                artery = np.zeros((1, x.shape[1], x.shape[2], x.shape[3]), dtype=np.float32)
+                start_add = ceil(diff / 2)
+                end_add = floor(diff / 2)
+                
+            pickle_data['padding_start'] = start_add
+            pickle_data['padding_end'] = end_add
+            
         
         return {    'x': x, 
                     'y': y, 

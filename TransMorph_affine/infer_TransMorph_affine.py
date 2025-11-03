@@ -71,7 +71,9 @@ def main():
         
 
     train_composed = transforms.Compose([trans.NumpyType((np.float32, np.float32))])
-    val_composed = transforms.Compose([trans.NumpyType((np.float32, np.float32))])
+    val_composed = transforms.Compose([trans.MinMax_norm(ignore_label=False),
+                                       trans.PadToSize(result_slices=64, padding_mode='min_value'),
+                                       trans.NumpyType((np.float32, np.float32))])
     
     val_set = datasets.OrCaScoreDataSet(glob.glob(val_dir + '/*.pkl'), transforms=val_composed)
     val_loader = DataLoader(val_set, batch_size=1, shuffle=False, num_workers=4, pin_memory=True)

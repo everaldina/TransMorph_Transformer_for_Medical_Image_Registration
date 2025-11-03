@@ -391,7 +391,6 @@ class PadToSize(Base):
         diff = self.result_slices - original_size
         
         if diff <= 0:
-            # Não precisa de padding
             self.start_add = 0
             self.end_add = 0
         else:
