@@ -92,8 +92,8 @@ class OrCaScoreDataSet(Dataset):
         dot_pos = path.rindex(".")
         id_image = path[dot_pos-6:dot_pos]
         pickle_data = pkload(path)
-        x = pickle_data['moved']
-        y = pickle_data['fixed']
+        x = pickle_data['ctai_aligned']
+        y = pickle_data['cti']
         x, y = x[None, ...], y[None, ...]
         x, y = self.transforms([x, y])
         x = np.ascontiguousarray(x)# [Bsize,channelsHeight,,Width,Depth]
@@ -119,13 +119,12 @@ class OrCaScoreDataSet(Dataset):
                 
             pickle_data['padding_start'] = start_add
             pickle_data['padding_end'] = end_add
-            
         
         return {    'x': x, 
                     'y': y, 
                     'id_image': id_image,
-                    'padding_start': pickle_data['padding_start'],
-                    'padding_end': pickle_data['padding_end'] ,
+                    'padding_start': pickle_data.get('padding_start', 0),
+                    'padding_end': pickle_data.get('padding_end', 64),
                     'artery': torch.from_numpy(artery).float(),
                 }
 

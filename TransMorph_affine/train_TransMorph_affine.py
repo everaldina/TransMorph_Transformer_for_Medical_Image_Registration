@@ -133,16 +133,16 @@ def main():
 
     # If continue from previous training
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
+    model.cuda()
     if cont_training:
         if epoch_start == 0:
             raise Exception('Set a model to load')
         # updated_lr = round(lr * np.power(1 - (epoch_start) / max_epoch, 0.9),8)
         # best_model = torch.load(model_dir + natsorted(os.listdir(model_dir))[-1])['state_dict']
-        best_model, epoch_optimizer = load_model(os.path.join(model_dir, f' epc_{epoch_start}.pth.tar'))
+        best_model, epoch_optimizer = load_model(os.path.join(model_dir, f'epc_{epoch_start}.pth.tar'))
         print(f'Model: epc_{epoch_start}.pth.tar loaded!')
         model.load_state_dict(best_model)
         optimizer.load_state_dict(epoch_optimizer)
-    model.cuda()
         
     # else:
     #     updated_lr = lr
@@ -176,6 +176,7 @@ def main():
             model.train()
             x = data['x'].cuda()
             y = data['y'].cuda()
+            # print(f"x = {x.shape}, y = {x.shape}")
             x_ = affine_aug(x, seed=idx)
             y_ = y
             aff, scl, transl, shr = model((x_, y_))
@@ -202,8 +203,7 @@ def main():
                 y_ = y  # affine_aug(y_half)
                 aff, scl, transl, shr = model((x_, y_))
                 x_trans, mat, inv_mat = affine_trans(x_, aff, scl, transl, shr)
-                y_trans = affine_trans.apply_affine(y_, inv_mat)
-
+                y_trans = affine_trans.apply_affine(y_, inv_mat, 'bilinear')
                 x_np = x_trans.squeeze().detach().cpu().numpy()
                 y_np = y_.squeeze().detach().cpu().numpy()
                 
