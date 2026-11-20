@@ -56,10 +56,10 @@ def main():
         os.makedirs(infer_dir)
 
     # Initialize model
-    H, W, D = 64, 512, 512
-    config = CONFIGS_TM['TransMorph_Affine']
-    config.img_size = (H, W, D)
-    config.window_size = (H // 16, W // 128, D // 128)
+    config = CONFIGS_TM['TransMorph_Affine']  # tamanhos e janela vêm da config
+    # full_size: tamanho dos volumes (onde a transformação e a loss são calculadas).
+    # A rede reamostra internamente para config.img_size.
+    H, W, D = config.full_size
     
     model = TransMorph.TransMorphAffine(config)
     affine_trans = TransMorph.AffineTransform()#AffineTransformer((H, W, D)).cuda()
@@ -72,7 +72,7 @@ def main():
 
     train_composed = transforms.Compose([trans.NumpyType((np.float32, np.float32))])
     val_composed = transforms.Compose([trans.MinMax_norm(ignore_label=False),
-                                       trans.PadToSize(result_slices=64, padding_mode='min_value'),
+                                       trans.PadToSize(result_slices=H, padding_mode='min_value'),
                                        trans.NumpyType((np.float32, np.float32))])
     
     val_set = datasets.OrCaScoreDataSet(glob.glob(val_dir + '/*.pkl'), transforms=val_composed)
@@ -109,7 +109,10 @@ def main():
                         'aff': aff.detach().cpu().squeeze().numpy(),
                         'scl': scl.detach().cpu().squeeze().numpy(),
                         'transl': transl.detach().cpu().squeeze().numpy(),
-                        'shr': shr.detach().cpu().squeeze().numpy()
+                        'shr': shr.detach().cpu().squeeze().numpy(),
+                        # matrizes 3x4 em coordenadas normalizadas (ver GUIA_TREINO_INFERENCIA.md)
+                        'mat': mat.detach().cpu().squeeze().numpy(),
+                        'inv_mat': inv_mat.detach().cpu().squeeze().numpy(),
                     },
                     'y': get_clean_data(y.detach().cpu().squeeze().numpy(), padding_start, padding_end, mode='cpu')
                 }
@@ -168,7 +171,9 @@ def main():
                             'aff': aff.detach().cpu().squeeze().numpy(),
                             'scl': scl.detach().cpu().squeeze().numpy(),
                             'transl': transl.detach().cpu().squeeze().numpy(),
-                            'shr': shr.detach().cpu().squeeze().numpy()
+                            'shr': shr.detach().cpu().squeeze().numpy(),
+                            'mat': mat.detach().cpu().squeeze().numpy(),
+                            'inv_mat': inv_mat.detach().cpu().squeeze().numpy(),
                         },
                         'y': get_clean_data(y.detach().cpu().squeeze().numpy(), padding_start, padding_end, mode='cpu')
                     }

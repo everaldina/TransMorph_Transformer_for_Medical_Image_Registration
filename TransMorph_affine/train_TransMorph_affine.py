@@ -121,11 +121,10 @@ def main():
     
 
     # Initialize model
-    # TODO: Pensar em como setar h, w, d
-    H, W, D = 64, 512, 512
-    config = CONFIGS_TM['TransMorph_Affine']
-    config.img_size = (H, W, D)
-    config.window_size = (H // 16, W // 128, D // 128)
+    config = CONFIGS_TM['TransMorph_Affine']  # tamanhos e janela vêm da config
+    # full_size: tamanho dos volumes (onde a transformação e a loss são calculadas).
+    # A rede reamostra internamente para config.img_size.
+    H, W, D = config.full_size
     
     model = TransMorph.TransMorphAffine(config)
     affine_trans = TransMorph.AffineTransform()#AffineTransformer((H, W, D)).cuda()
@@ -150,13 +149,13 @@ def main():
     # Initialize training
     # TODO: verificar modficcao vit
     train_composed = transforms.Compose([trans.MinMax_norm(ignore_label=False),
-                                         trans.PadToSize(result_slices=64, padding_mode='min_value'),
+                                         trans.PadToSize(result_slices=H, padding_mode='min_value'),
                                          trans.RandomFlip(0),
                                          trans.NumpyType((np.float32, np.float32)),
                                          ])
 
     val_composed = transforms.Compose([trans.MinMax_norm(ignore_label=False),
-                                        trans.PadToSize(result_slices=64, padding_mode='min_value'),
+                                        trans.PadToSize(result_slices=H, padding_mode='min_value'),
                                         trans.NumpyType((np.float32, np.float32)),
                                         ])
     train_set = datasets.OrCaScoreDataSet(glob.glob(train_dir + '/*.pkl'), transforms=train_composed)
@@ -219,19 +218,19 @@ def main():
                     # print(mat)
                     plt.figure()
                     plt.subplot(2, 2, 1)
-                    plt.imshow(x_.cpu().detach().numpy()[0, 0, :, 32, ])
+                    plt.imshow(x_.cpu().detach().numpy()[0, 0, :, W // 2, ])
                     plt.title('Imagem original - X')
                     
                     plt.subplot(2, 2, 2)
-                    plt.imshow(y_.cpu().detach().numpy()[0, 0, :, 32, ])
+                    plt.imshow(y_.cpu().detach().numpy()[0, 0, :, W // 2, ])
                     plt.title('Imagem alvo - Y')
                     
                     plt.subplot(2, 2, 4)
-                    plt.imshow(x_trans.cpu().detach().numpy()[0, 0, :, 32, ])
+                    plt.imshow(x_trans.cpu().detach().numpy()[0, 0, :, W // 2, ])
                     plt.title('Transformação de Y')
                     
                     plt.subplot(2, 2, 3)
-                    plt.imshow(y_trans.cpu().detach().numpy()[0, 0, :, 32, ])
+                    plt.imshow(y_trans.cpu().detach().numpy()[0, 0, :, W // 2, ])
                     plt.title('Transformação de X')
                     
                     

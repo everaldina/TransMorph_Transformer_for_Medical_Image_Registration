@@ -85,6 +85,16 @@ def get_3DTransMorph_config():
 
 
 def get_3DTransMorph_Affine_config():
+    '''
+    Affine TransMorph (artigo: embed 12, depths {1,1,2,2}, heads {1,1,2,2}).
+
+    full_size: tamanho dos volumes do dataset (96 x 800 x 800, 2.5 x 0.314 x 0.314 mm).
+               É nele que a transformação é aplicada e a loss/métricas são calculadas.
+    img_size:  tamanho da ENTRADA DA REDE. O modelo reamostra a entrada de full_size para
+               img_size com anti-aliasing (ver resize_antialias). 96 x 96 x 96 dá
+               2.5 x ~2.62 x ~2.62 mm (quase isotrópico).
+               Estágios: 24^3, 12^3, 6^3, 3^3 -> window_size (3, 3, 3) divide todos.
+    '''
     config = ml_collections.ConfigDict()
     config.if_transskip = True
     config.if_convskip = True
@@ -93,7 +103,7 @@ def get_3DTransMorph_Affine_config():
     config.embed_dim = 12
     config.depths = (1, 1, 2, 2)
     config.num_heads = (1, 1, 2, 2)
-    config.window_size = (5, 6, 7, 7)
+    config.window_size = (3, 3, 3)
     config.mlp_ratio = 4
     config.pat_merg_rf = 4
     config.qkv_bias = False
@@ -106,7 +116,8 @@ def get_3DTransMorph_Affine_config():
     config.use_checkpoint = False
     config.out_indices = (0, 1, 2, 3)
     config.reg_head_chan = 16
-    config.img_size = (160, 192, 224)
+    config.full_size = (96, 800, 800)
+    config.img_size = (96, 96, 96)
     config.out_chan = 3
     return config
 

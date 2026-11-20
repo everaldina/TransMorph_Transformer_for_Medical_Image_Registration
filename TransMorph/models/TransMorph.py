@@ -22,7 +22,131 @@ from timm.models.layers import DropPath, trunc_normal_, to_3tuple
 from torch.distributions.normal import Normal
 import torch.nn.functional as nnf
 import numpy as np
+import math
+import warnings
 import models.configs_TransMorph as configs
+
+
+def stage_resolutions(img_size, patch_size, num_layers):
+    """Resolução espacial de cada estágio do Swin (mesma regra de PatchEmbed + PatchMerging)."""
+    patch_size = to_3tuple(patch_size)
+    res = [math.ceil(s / p) for s, p in zip(img_size, patch_size)]
+    out = [tuple(res)]
+    for _ in range(num_layers - 1):
+        res = [(r + 1) // 2 for r in res]
+        out.append(tuple(res))
+    return out
+
+
+def check_config(config):
+    """Valida img_size e window_size antes de montar a rede.
+
+    - img_size precisa ser divisível por patch_size * 2**(num_layers-1) (= 32 no padrão),
+      senão o PatchMerging falha (dimensão ímpar) e o decoder não concatena os skips.
+    - window_size deveria dividir a resolução de todos os estágios; se não dividir o código faz
+      padding, mas os tokens de padding entram na atenção sem máscara (desperdício + ruído).
+    """
+    num_layers = len(config.depths)
+    factor = config.patch_size * 2 ** (num_layers - 1)
+    if any(s % factor for s in config.img_size):
+        raise ValueError(f'img_size {tuple(config.img_size)} precisa ser divisível por {factor} '
+                         f'(patch_size={config.patch_size} x {num_layers - 1} downsamplings).')
+    win = tuple(config.window_size[:3])
+    for i, res in enumerate(stage_resolutions(config.img_size, config.patch_size, num_layers)):
+        if any(r % w for r, w in zip(res, win)):
+            warnings.warn(f'window_size {win} não divide a resolução do estágio {i} {res}; '
+                          f'vai haver padding. Escolha uma janela que divida {res}.')
+
+
+def _gaussian_kernel_1d(sigma, device, dtype, truncate=4.0):
+    radius = max(1, int(math.ceil(truncate * sigma)))
+    t = torch.arange(-radius, radius + 1, device=device, dtype=dtype)
+    k = torch.exp(-0.5 * (t / sigma) ** 2)
+    return k / k.sum()
+
+
+def resize_antialias(x, size):
+    """Reamostra x (B, C, D, H, W) para `size` sem aliasing e sem deslocar a geometria.
+
+    Mesma função do TransMorph_affine (models/TransMorph_affine.py):
+    1. em cada eixo reduzido (f = n_in / n_out > 1), filtro gaussiano 1D com
+       sigma = (f - 1) / 2 voxels (regra do skimage.transform.resize(anti_aliasing=True)),
+       borda replicada;
+    2. interpolação trilinear com align_corners=False (preserva extensão física e centro).
+    """
+    in_size = tuple(x.shape[2:])
+    size = tuple(size)
+    if in_size == size:
+        return x
+    B, C = x.shape[:2]
+    x = x.reshape(B * C, 1, *in_size)
+    for axis, (n_in, n_out) in enumerate(zip(in_size, size)):
+        f = n_in / n_out
+        if f <= 1:
+            continue
+        k = _gaussian_kernel_1d((f - 1) / 2, x.device, x.dtype)
+        r = (k.numel() - 1) // 2
+        k_shape = [1, 1, 1, 1, 1]
+        k_shape[2 + axis] = k.numel()
+        pad = [0] * 6  # ordem do F.pad: (W_esq, W_dir, H_esq, H_dir, D_esq, D_dir)
+        pad[2 * (2 - axis)] = pad[2 * (2 - axis) + 1] = r
+        x = nnf.conv3d(nnf.pad(x, pad, mode='replicate'), k.view(k_shape))
+    x = nnf.interpolate(x, size=size, mode='trilinear', align_corners=False)
+    return x.reshape(B, C, *size)
+
+
+def upsample_flow(flow, size):
+    """Leva um campo de deslocamento (B, 3, d, h, w), em voxels da grade reduzida, para `size`.
+
+    Duas coisas mudam com a resolução:
+    - a POSIÇÃO de cada vetor: interpolação trilinear com align_corners=False, a mesma
+      convenção geométrica do resize_antialias (voxel i da grade reduzida fica em
+      (i + 0.5) * f - 0.5 na grade cheia);
+    - o TAMANHO do deslocamento: o campo está em voxels, e 1 voxel reduzido = f voxels cheios,
+      então cada componente é multiplicada pelo fator do seu eixo (canais na ordem z, y, x).
+    """
+    in_size = flow.shape[2:]
+    up = nnf.interpolate(flow, size=tuple(size), mode='trilinear', align_corners=False)
+    scale = torch.tensor([n_out / n_in for n_in, n_out in zip(in_size, size)],
+                         device=flow.device, dtype=flow.dtype).view(1, 3, 1, 1, 1)
+    return up * scale
+
+
+def warp(src, flow, mode='bilinear'):
+    """Aplica um campo em voxels (B, 3, D, H, W) a src com a mesma convenção do SpatialTransformer
+    (amostra src no voxel i + flow[i]), sem guardar a grade como buffer (útil em resolução cheia)."""
+    shape = flow.shape[2:]
+    vectors = [torch.arange(0, s, device=flow.device, dtype=flow.dtype) for s in shape]
+    grid = torch.stack(torch.meshgrid(vectors, indexing='ij')).unsqueeze(0)
+    new_locs = grid + flow
+    new_locs = torch.stack([2 * (new_locs[:, i] / (shape[i] - 1) - 0.5) for i in range(3)], dim=-1)
+    return nnf.grid_sample(src, new_locs[..., [2, 1, 0]], align_corners=True, mode=mode)
+
+
+def warp_affine_then_flow(src, mat, flow, mode='bilinear'):
+    """Aplica a afim do TransMorph_affine e depois o campo do deformável numa ÚNICA interpolação.
+
+    Equivale a warp_full(affine(src, mat), flow), mas sem reamostrar duas vezes (importante para
+    rótulos com 'nearest', em que duas reamostragens acumulam erro).
+      src:  (B, C, D, H, W) no espaço ORIGINAL da CTAI (antes da afim), resolução cheia, com padding.
+      mat:  (B, 3, 4) matriz 'mat' salva pela inferência do TransMorph_affine (normalizada,
+            align_corners=False, ordem x, y, z).
+      flow: (B, 3, d, h, w) campo do deformável em img_size (voxels, ordem z, y, x).
+    Conta: o voxel p da CTI busca a imagem afim em p + u(p) (voxels, convenção align_corners=True
+    do SpatialTransformer); a imagem afim no voxel q busca a CTAI em mat * norm(q), com
+    norm(q) = (2q + 1) / n - 1 (convenção align_corners=False do affine_grid).
+    """
+    shape = src.shape[2:]
+    B = src.shape[0]
+    u = upsample_flow(flow, shape)
+    vectors = [torch.arange(0, s, device=src.device, dtype=u.dtype) for s in shape]
+    grid = torch.stack(torch.meshgrid(vectors, indexing='ij')).unsqueeze(0)
+    n = torch.tensor(shape, device=src.device, dtype=u.dtype).view(1, 3, 1, 1, 1)
+    q = (2 * (grid + u) + 1) / n - 1                     # normalizado, ordem (z, y, x)
+    q = q[:, [2, 1, 0]]                                   # ordem (x, y, z) do affine_grid
+    M, t = mat[:, :, :3].to(u.dtype), mat[:, :, 3].to(u.dtype)
+    p = torch.einsum('bij,bj...->bi...', M, q) + t.view(B, 3, 1, 1, 1)
+    return nnf.grid_sample(src, p.permute(0, 2, 3, 4, 1), align_corners=False, mode=mode)
 
 class Mlp(nn.Module):
     def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.GELU, drop=0.):
@@ -808,6 +932,7 @@ class TransMorph(nn.Module):
         TransMorph Model
         '''
         super(TransMorph, self).__init__()
+        check_config(config)
         if_convskip = config.if_convskip
         self.if_convskip = if_convskip
         if_transskip = config.if_transskip
@@ -845,8 +970,22 @@ class TransMorph(nn.Module):
         )
         self.spatial_trans = SpatialTransformer(config.img_size)
         self.avg_pool = nn.AvgPool3d(3, stride=2, padding=1)
+        self.img_size = tuple(config.img_size)
+
+    def downsample(self, x):
+        """Reduz x (B, C, ...) de qualquer tamanho para img_size (entrada da rede), com anti-aliasing."""
+        return resize_antialias(x, self.img_size)
+
+    def warp_full(self, src, flow, mode='bilinear'):
+        """Aplica o campo previsto (em img_size) a src em resolução cheia (ex.: 96x800x800).
+        Para rótulos use mode='nearest'."""
+        return warp(src, upsample_flow(flow, src.shape[2:]), mode=mode)
 
     def forward(self, x):
+        """x: cat(móvel, fixa) em qualquer tamanho; é reduzido para img_size se precisar.
+        Retorna (móvel deformada, campo), ambos em img_size. O campo está em voxels de img_size;
+        para aplicar em resolução cheia use warp_full."""
+        x = self.downsample(x)
         source = x[:, 0:1, :, :]
         if self.if_convskip:
             x_s0 = x.clone()
@@ -878,6 +1017,7 @@ class TransMorph(nn.Module):
 
 CONFIGS = {
     'TransMorph': configs.get_3DTransMorph_config(),
+    'TransMorph-OrCaScore': configs.get_3DTransMorph_OrCaScore_config(),
     'TransMorph-No-Conv-Skip': configs.get_3DTransMorphNoConvSkip_config(),
     'TransMorph-No-Trans-Skip': configs.get_3DTransMorphNoTransSkip_config(),
     'TransMorph-No-Skip': configs.get_3DTransMorphNoSkip_config(),

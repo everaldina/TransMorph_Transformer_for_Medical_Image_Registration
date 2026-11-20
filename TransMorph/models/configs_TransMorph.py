@@ -61,6 +61,23 @@ def get_3DTransMorph_config():
     config.img_size = (160, 192, 224)
     return config
 
+def get_3DTransMorph_OrCaScore_config():
+    '''
+    TransMorph (mesmos hiperparâmetros do artigo) para os volumes do OrCaScore.
+
+    full_size: volumes do dataset, 96 x 800 x 800 (2.5 x 0.314 x 0.314 mm).
+    img_size:  entrada da rede, 96 x 256 x 256 (2.5 x ~0.98 x ~0.98 mm; ~6.3M voxels, perto dos
+               ~6.9M do artigo). O modelo reduz a entrada com anti-aliasing; o campo previsto é
+               ampliado para full_size com TransMorph.warp_full.
+    Estágios: 24x64x64, 12x32x32, 6x16x16, 3x8x8 -> window_size (3, 8, 8) divide todos e, como
+    no artigo, é igual à resolução do último estágio.
+    '''
+    config = get_3DTransMorph_config()
+    config.window_size = (3, 8, 8)
+    config.full_size = (96, 800, 800)
+    config.img_size = (96, 256, 256)
+    return config
+
 def get_3DTransMorphNoRelativePosEmbd_config():
     '''
     Trainable params: 15,201,579
