@@ -1,276 +1,448 @@
-import os, glob, losses, random, math
+"""Training of TransMorph-Affine on the OrCaScore NIfTI dataset (moving CTAI ->
+fixed CTI).
+
+- Training: AdamW, MSE between the warped CTAI and the CTI at full
+  resolution, synthetic misalignment with affine_aug on the moving image.
+- Validation: real pairs (no augmentation), measured without the padding; the
+  best validation SSIM defines best.pth.tar.
+"""
+
+# isort: skip_file
+# (the repository root must be on sys.path before importing orcascore)
+import argparse
+import math
+import os
+import random
 import sys
-from torch.utils.data import DataLoader
-from data import datasets, trans
+import time
+
 import numpy as np
 import torch
-from torchvision import transforms
-from torch import optim
-import torch.nn.functional as F
-import matplotlib.pyplot as plt
-from natsort import natsorted
-from models.TransMorph_affine import CONFIGS as CONFIGS_TM
-import models.TransMorph_affine as TransMorph
 import torch.nn as nn
-import argparse
-from skimage.metrics import structural_similarity as ssim
-from datetime import datetime
-from utils.logger import Logger
-from utils.model_utils import load_model
+import torch.nn.functional as F
+from torch.utils.data import DataLoader
 
-def affine_aug(im, im_label=None, seed=10):
-    # mode = 'bilinear' or 'nearest'
-    with torch.no_grad():
-        random.seed(seed)
-        angle_range = 10
-        trans_range = 0.1
-        scale_range = 0.1
-        # scale_range = 0.15
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, REPO_ROOT)
 
-        angle_xyz = (random.uniform(-angle_range, angle_range) * math.pi / 180,
-                     random.uniform(-angle_range, angle_range) * math.pi / 180,
-                     random.uniform(-angle_range, angle_range) * math.pi / 180)
-        scale_xyz = (random.uniform(-scale_range, scale_range), random.uniform(-scale_range, scale_range),
-                     random.uniform(-scale_range, scale_range))
-        trans_xyz = (random.uniform(-trans_range, trans_range), random.uniform(-trans_range, trans_range),
-                     random.uniform(-trans_range, trans_range))
+from orcascore.affine_model import (  # noqa: E402
+    affine_config_for_checkpoint,
+    build_affine,
+    default_affine_config,
+    predict_affine,
+)
+from orcascore.dataset import (  # noqa: E402
+    PairedCTDataset,
+    padding_to_dict,
+    read_split_ids,
+)
+from orcascore.io_utils import (  # noqa: E402
+    DEFAULT_OUTPUT_DIR,
+    DEFAULT_SPLIT_DIR,
+    append_history,
+    load_checkpoint,
+    now,
+    prepare_experiment,
+    resolve_checkpoint,
+    save_checkpoint,
+    save_experiment_info,
+    setup_device,
+    start_logging,
+)
+from orcascore.metrics import validation_metrics  # noqa: E402
+from orcascore.plots import (  # noqa: E402
+    difference_image,
+    read_spacing_zyx,
+    save_comparison_figure,
+)
 
-        rotation_x = torch.tensor([
-            [1., 0, 0, 0],
-            [0, math.cos(angle_xyz[0]), -math.sin(angle_xyz[0]), 0],
-            [0, math.sin(angle_xyz[0]), math.cos(angle_xyz[0]), 0],
-            [0, 0, 0, 1.]
-        ], requires_grad=False).unsqueeze(0).cuda()
+# affine_aug ranges
+ANGLE_RANGE_DEGREES = 10
+TRANSLATION_RANGE = 0.1
+SCALE_RANGE = 0.1
 
-        rotation_y = torch.tensor([
-            [math.cos(angle_xyz[1]), 0, math.sin(angle_xyz[1]), 0],
-            [0, 1., 0, 0],
-            [-math.sin(angle_xyz[1]), 0, math.cos(angle_xyz[1]), 0],
-            [0, 0, 0, 1.]
-        ], requires_grad=False).unsqueeze(0).cuda()
 
-        rotation_z = torch.tensor([
-            [math.cos(angle_xyz[2]), -math.sin(angle_xyz[2]), 0, 0],
-            [math.sin(angle_xyz[2]), math.cos(angle_xyz[2]), 0, 0],
-            [0, 0, 1., 0],
-            [0, 0, 0, 1.]
-        ], requires_grad=False).unsqueeze(0).cuda()
-
-        trans_shear_xyz = torch.tensor([
-            [1. + scale_xyz[0], 0, 0, trans_xyz[0]],
-            [0, 1. + scale_xyz[1], 0, trans_xyz[1]],
-            [0, 0, 1. + scale_xyz[2], trans_xyz[2]],
-            [0, 0, 0, 1]
-        ], requires_grad=False).unsqueeze(0).cuda()
-
-        theta_final = torch.matmul(rotation_x, rotation_y)
-        theta_final = torch.matmul(theta_final, rotation_z)
-        theta_final = torch.matmul(theta_final, trans_shear_xyz)
-
-        output_disp_e0_v = F.affine_grid(theta_final[:, 0:3, :], im.shape, align_corners=False)
-
-        im = F.grid_sample(im, output_disp_e0_v, mode='bilinear', padding_mode="border", align_corners=False)
-
-        if im_label is not None:
-            im_label = F.grid_sample(im_label, output_disp_e0_v, mode='nearest', padding_mode="border",
-                                     align_corners=False)
-            return im, im_label
-        else:
-            return im
-
-def args_input():
-    parser = argparse.ArgumentParser(description='Affine TransMorph Affine')
-    parser.add_argument('--train_dir', type=str, default='train', help='path to train data')
-    parser.add_argument('--val_dir', type=str,  default='val', help='path to val data')
-    parser.add_argument('--save', type=str,  default='transmorph_affine', help='Save folder')
-    parser.add_argument('--lr', type=float,  default=0.0001, help='Learning Rate')
-    parser.add_argument('--batch_size', type=int,  default=1, help='Batch size')
-    parser.add_argument('--continue_train', action='store_true', help='Flag for continue training a model')
-    parser.add_argument('--num_epochs', type=int, default=500, help='Total number of epochs')
-    parser.add_argument('--epoch_start', type=int, default=0, help='Start epoch for training')
+def parse_args() -> argparse.Namespace:
+    """Command line arguments."""
+    parser = argparse.ArgumentParser(description="Train TransMorph-Affine")
+    parser.add_argument(
+        "--dataset_dir",
+        required=True,
+        help="dataset folder (dataset.csv, config.json)",
+    )
+    parser.add_argument(
+        "--name",
+        required=True,
+        help="experiment name (folder inside --output_dir)",
+    )
+    parser.add_argument(
+        "--output_dir",
+        default=DEFAULT_OUTPUT_DIR,
+        help="where experiments are saved",
+    )
+    parser.add_argument(
+        "--train_split",
+        default=os.path.join(DEFAULT_SPLIT_DIR, "train.csv"),
+        help="CSV with the training case_ids (column ID)",
+    )
+    parser.add_argument(
+        "--val_split",
+        default=os.path.join(DEFAULT_SPLIT_DIR, "test.csv"),
+        help="CSV with the validation case_ids (column ID)",
+    )
+    parser.add_argument("--lr", type=float, default=1e-4, help="learning rate")
+    parser.add_argument("--batch_size", type=int, default=1, help="batch size")
+    parser.add_argument(
+        "--num_epochs", type=int, default=500, help="total number of epochs"
+    )
+    parser.add_argument(
+        "--save_every",
+        type=int,
+        default=10,
+        help="keep a copy of the checkpoint every N epochs "
+        "(last/best are always kept)",
+    )
+    parser.add_argument(
+        "--resume",
+        nargs="?",
+        const="last",
+        default=None,
+        help="resume from a checkpoint of this experiment (default: last); "
+        "'last', 'best', 'epc_<n>' or a path to a .pth.tar file",
+    )
+    parser.add_argument(
+        "--no_flip",
+        action="store_true",
+        help="disable the random flip augmentation",
+    )
+    parser.add_argument(
+        "--num_workers", type=int, default=4, help="DataLoader workers"
+    )
+    parser.add_argument(
+        "--seed", type=int, default=None, help="optional seed for torch/numpy"
+    )
+    parser.add_argument(
+        "--device", default="cuda", choices=["cuda", "cpu"], help="device"
+    )
+    parser.add_argument(
+        "--gpu", type=int, default=0, help="GPU index (cuda:N)"
+    )
     return parser.parse_args()
 
-def main():
-    args = args_input()
 
-    # atlas_dir = 'D:/DATA/IXI/atlas.pkl'
-    train_dir = args.train_dir
-    val_dir = args.val_dir
-    save_dir = args.save
-    
-    model_dir = os.path.join('experiments', save_dir)
-    if not os.path.exists(model_dir):
-        os.makedirs(model_dir)
-    
-    img_dir = os.path.join(model_dir, 'images')
-    if not os.path.exists(img_dir):
-        os.makedirs(img_dir)
-    
-    batch_size = args.batch_size
-    lr = args.lr
-    epoch_start = args.epoch_start
-    max_epoch = args.num_epochs
-    cont_training = args.continue_train
+def rotation_matrix(axis: int, angle: float) -> torch.Tensor:
+    """4x4 homogeneous rotation matrix around one axis of the normalized grid.
 
-    log_dir = os.path.join('logs', save_dir)
-    if not os.path.exists(log_dir):
-        os.makedirs(log_dir)
-    sys.stdout = Logger(log_dir, f"logfile_epoch_str{epoch_start}.log")
-    sys.stderr = sys.stdout
-    
-    
+    Args:
+        axis: 0 = x, 1 = y, 2 = z.
+        angle: rotation angle in radians.
 
-    # Initialize model
-    # TODO: Pensar em como setar h, w, d
-    H, W, D = 64, 512, 512
-    config = CONFIGS_TM['TransMorph_Affine']
-    config.img_size = (H, W, D)
-    config.window_size = (H // 16, W // 128, D // 128)
-    
-    model = TransMorph.TransMorphAffine(config)
-    affine_trans = TransMorph.AffineTransform()#AffineTransformer((H, W, D)).cuda()
+    Returns:
+        Rotation matrix of shape (4, 4).
+    """
+    cos, sin = math.cos(angle), math.sin(angle)
+    matrix = torch.eye(4)
+    first_axis, second_axis = [index for index in range(3) if index != axis]
+    matrix[first_axis, first_axis] = cos
+    matrix[second_axis, second_axis] = cos
+    # same signs as the authors' affine_aug: -sin above the diagonal for x
+    # and z, below for y
+    if axis == 1:
+        matrix[first_axis, second_axis] = sin
+        matrix[second_axis, first_axis] = -sin
+    else:
+        matrix[first_axis, second_axis] = -sin
+        matrix[second_axis, first_axis] = sin
+    return matrix
 
 
-    # If continue from previous training
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
-    model.cuda()
-    if cont_training:
-        if epoch_start == 0:
-            raise Exception('Set a model to load')
-        # updated_lr = round(lr * np.power(1 - (epoch_start) / max_epoch, 0.9),8)
-        # best_model = torch.load(model_dir + natsorted(os.listdir(model_dir))[-1])['state_dict']
-        best_model, epoch_optimizer = load_model(os.path.join(model_dir, f'epc_{epoch_start}.pth.tar'))
-        print(f'Model: epc_{epoch_start}.pth.tar loaded!')
-        model.load_state_dict(best_model)
-        optimizer.load_state_dict(epoch_optimizer)
-        
-    # else:
-    #     updated_lr = lr
+def random_affine_matrix() -> torch.Tensor:
+    """Random 4x4 affine matrix used by affine_aug.
 
-    # Initialize training
-    # TODO: verificar modficcao vit
-    train_composed = transforms.Compose([trans.MinMax_norm(ignore_label=False),
-                                         trans.PadToSize(result_slices=64, padding_mode='min_value'),
-                                         trans.RandomFlip(0),
-                                         trans.NumpyType((np.float32, np.float32)),
-                                         ])
+    Composition R_x @ R_y @ R_z @ (scale + translation), with values drawn
+    uniformly per axis:
+        - rotation: ±ANGLE_RANGE_DEGREES;
+        - scale: 1 ± SCALE_RANGE;
+        - translation: ±TRANSLATION_RANGE (normalized coordinates, where the
+          volume spans [-1, 1]).
 
-    val_composed = transforms.Compose([trans.MinMax_norm(ignore_label=False),
-                                        trans.PadToSize(result_slices=64, padding_mode='min_value'),
-                                        trans.NumpyType((np.float32, np.float32)),
-                                        ])
-    train_set = datasets.OrCaScoreDataSet(glob.glob(train_dir + '/*.pkl'), transforms=train_composed)
-    val_set = datasets.OrCaScoreDataSet(glob.glob(val_dir + '/*.pkl'), transforms=val_composed)
-    train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
-    val_loader = DataLoader(val_set, batch_size=1, shuffle=False, num_workers=4, pin_memory=True)
+    Values come from the `random` module in the order of the authors'
+    affine_aug (angles, scales, translations).
+    """
+    angles = [
+        random.uniform(-ANGLE_RANGE_DEGREES, ANGLE_RANGE_DEGREES)
+        * math.pi
+        / 180
+        for _ in range(3)
+    ]
+    scales = [random.uniform(-SCALE_RANGE, SCALE_RANGE) for _ in range(3)]
+    translations = [
+        random.uniform(-TRANSLATION_RANGE, TRANSLATION_RANGE) for _ in range(3)
+    ]
+    scale_translation = torch.eye(4)
+    for axis in range(3):
+        scale_translation[axis, axis] = 1.0 + scales[axis]
+        scale_translation[axis, 3] = translations[axis]
+    matrix = rotation_matrix(axis=0, angle=angles[0]) @ rotation_matrix(
+        axis=1, angle=angles[1]
+    )
+    matrix = matrix @ rotation_matrix(axis=2, angle=angles[2])
+    return matrix @ scale_translation
+
+
+def affine_aug(images: torch.Tensor, seed: int) -> torch.Tensor:
+    """Applies a random affine (random_affine_matrix) to each sample of the
+    batch, with bilinear interpolation and border padding.
+
+    Args:
+        images: (B, C, D, H, W) tensor.
+        seed: seed of the `random` module; the training loop passes the
+            iteration index, as in the authors' code.
+
+    Returns:
+        (B, C, D, H, W) tensor with the augmented images.
+    """
+    with torch.no_grad():
+        random.seed(seed)
+        theta = torch.stack(
+            [random_affine_matrix() for _ in range(images.shape[0])]
+        )
+        theta = theta[:, :3, :].to(device=images.device, dtype=images.dtype)
+        grid = F.affine_grid(theta, list(images.shape), align_corners=False)
+        return F.grid_sample(
+            images,
+            grid,
+            mode="bilinear",
+            padding_mode="border",
+            align_corners=False,
+        )
+
+
+def train_one_epoch(
+    model, transform, loader, optimizer, criterion, device, epoch: int
+) -> float:
+    """One training epoch; returns the mean loss."""
+    model.train()
+    losses = []
+    for index, batch in enumerate(loader, start=1):
+        moving = batch["x"].to(device)
+        fixed = batch["y"].to(device)
+        moving_augmented = affine_aug(moving, seed=index)
+        output = predict_affine(
+            model, transform, moving=moving_augmented, fixed=fixed
+        )
+        loss = criterion(output["warped"], fixed)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        losses.append(loss.item())
+        print(
+            f"Epoch {epoch} iter {index}/{len(loader)} loss {loss.item():.6f}"
+        )
+    return float(np.mean(losses))
+
+
+def validate(
+    model, transform, loader, device, figure_path: str = None
+) -> dict:
+    """Validation on the real pairs: SSIM per slice and MSE without padding,
+    before and after the affine.
+
+    Args:
+        figure_path: if given, saves a figure of the first pair.
+
+    Returns:
+        dict with the mean "val_ssim_pre", "val_ssim", "val_mse_pre" and
+        "val_mse" over the validation pairs.
+    """
+    model.eval()
+    pre, post = [], []
+    with torch.no_grad():
+        for index, batch in enumerate(loader):
+            moving = batch["x"].to(device)
+            fixed = batch["y"].to(device)
+            padding = padding_to_dict(batch["padding"][0])
+            output = predict_affine(
+                model, transform, moving=moving, fixed=fixed
+            )
+            pre.append(validation_metrics(fixed, moving, padding=padding))
+            post.append(
+                validation_metrics(fixed, output["warped"], padding=padding)
+            )
+            if figure_path and index == 0:
+                save_comparison_figure(
+                    path=figure_path,
+                    images={
+                        "ACTC (moving)": moving,
+                        "TC-ECC (fixed)": fixed,
+                        "ACTC affine": output["warped"],
+                        "|TC-ECC - ACTC|": difference_image(fixed, moving),
+                        "|TC-ECC - ACTC affine|": difference_image(
+                            fixed, output["warped"]
+                        ),
+                    },
+                    spacing_zyx=read_spacing_zyx(
+                        os.path.join(batch["pair_dir"][0], "cti.nii.gz")
+                    ),
+                    title=f"{batch['pair_id'][0]} - "
+                    f"{os.path.basename(figure_path)}",
+                )
+    return {
+        "val_ssim_pre": float(np.mean([m["ssim"] for m in pre])),
+        "val_ssim": float(np.mean([m["ssim"] for m in post])),
+        "val_mse_pre": float(np.mean([m["mse"] for m in pre])),
+        "val_mse": float(np.mean([m["mse"] for m in post])),
+    }
+
+
+def main() -> None:
+    """Trains the affine network with periodic validation and checkpoints."""
+    args = parse_args()
+
+    # create experiment folders and log file
+    paths = prepare_experiment(output_dir=args.output_dir, name=args.name)
+    log_path = start_logging(log_dir=paths["logs"], prefix="train")
+    print(f"[{now()}] log: {log_path}")
+
+    device = setup_device(device=args.device, gpu=args.gpu)
+    if args.seed is not None:
+        torch.manual_seed(args.seed)
+        np.random.seed(args.seed)
+
+    # data reading and loading
+    train_ids = read_split_ids(args.train_split)
+    val_ids = read_split_ids(args.val_split)
+    train_set = PairedCTDataset(
+        args.dataset_dir, case_ids=train_ids, random_flip=not args.no_flip
+    )
+    val_set = PairedCTDataset(args.dataset_dir, case_ids=val_ids)
+    print(
+        f"Pairs: {len(train_set)} train ({len(train_ids)} patients), "
+        f"{len(val_set)} validation ({len(val_ids)} patients)"
+    )
+    train_loader = DataLoader(
+        train_set,
+        batch_size=args.batch_size,
+        shuffle=True,
+        num_workers=args.num_workers,
+        pin_memory=True,
+    )
+    val_loader = DataLoader(
+        val_set,
+        batch_size=1,
+        shuffle=False,
+        num_workers=args.num_workers,
+        pin_memory=True,
+    )
+
+    # model
+    config = default_affine_config()
+    model, transform = build_affine(config=config, device=device)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
     criterion = nn.MSELoss()
-    for epoch in range(epoch_start, max_epoch):
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        print(f"\n[{now}] ==== Epoch start {epoch + 1}/{max_epoch} ====")
-        
-        # Training
-        idx = 0
-        print('Training Starts')
-        for data in train_loader:
-            idx += 1
-            model.train()
-            x = data['x'].cuda()
-            y = data['y'].cuda()
-            # print(f"x = {x.shape}, y = {x.shape}")
-            x_ = affine_aug(x, seed=idx)
-            y_ = y
-            aff, scl, transl, shr = model((x_, y_))
-            x_trans, mat, inv_mat = affine_trans(x_, aff, scl, transl, shr)
-            loss = criterion(x_trans, y_)
-            # compute gradient and do SGD step
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
 
-            print('Iter {} of {} loss {:.4f}'.format(idx, len(train_loader), loss.item()))
-       
-        # validation
-        idd = 0
-        print('Validation start')
-        with torch.no_grad():
-            avg_ssim = 0
-            ssim_count = 0
-            for data in val_loader:
-                model.eval()
-                x = data['x'].cuda()
-                y = data['y'].cuda()
-                x_ = affine_aug(x, seed=idd)
-                y_ = y  # affine_aug(y_half)
-                aff, scl, transl, shr = model((x_, y_))
-                x_trans, mat, inv_mat = affine_trans(x_, aff, scl, transl, shr)
-                y_trans = affine_trans.apply_affine(y_, inv_mat, 'bilinear')
-                x_np = x_trans.squeeze().detach().cpu().numpy()
-                y_np = y_.squeeze().detach().cpu().numpy()
-                
-                data_range = max(x_np.max(), y_np.max()) - min(x_np.min(), y_np.min())
-                
-                if data_range == 0 or np.isnan(data_range) or np.isinf(data_range):
-                    continue
-                else:
-                    avg_ssim += ssim(x_np, y_np, data_range= data_range)
-                    ssim_count += 1
-                
-                if (epoch % 10 == 0) or (epoch == max_epoch - 1):
-                    # print(mat)
-                    plt.figure()
-                    plt.subplot(2, 2, 1)
-                    plt.imshow(x_.cpu().detach().numpy()[0, 0, :, 32, ])
-                    plt.title('Imagem original - X')
-                    
-                    plt.subplot(2, 2, 2)
-                    plt.imshow(y_.cpu().detach().numpy()[0, 0, :, 32, ])
-                    plt.title('Imagem alvo - Y')
-                    
-                    plt.subplot(2, 2, 4)
-                    plt.imshow(x_trans.cpu().detach().numpy()[0, 0, :, 32, ])
-                    plt.title('Transformação de Y')
-                    
-                    plt.subplot(2, 2, 3)
-                    plt.imshow(y_trans.cpu().detach().numpy()[0, 0, :, 32, ])
-                    plt.title('Transformação de X')
-                    
-                    
-                    plt.suptitle('Comparação de transformação afim - epoca ' + str(epoch+1), fontsize=16)  # Título geral
-                    plt.tight_layout(rect=[0, 0, 1, 0.95])
-                    plt.savefig(os.path.join(img_dir, f'reg_results{idd}-epc{epoch+1}'))
-                    plt.close()
-                idd += 1
-            avg_ssim = avg_ssim/ssim_count
-            print(f'Average SSMI = {avg_ssim}')
-        if (epoch % 10 == 0) or (epoch == max_epoch - 1):
-            print('Save epoch', epoch+1)
-            save_state = {
-                'model_state': model.state_dict(),
-                'optimizer': optimizer.state_dict()
-            }
-            torch.save(save_state, os.path.join(model_dir, f'epc_{epoch + 1}.pth.tar'))
-        # TODO:  colocar avg ssmi ??
+    # resume from checkpoint if requested
+    start_epoch, best_ssim = 0, -np.inf
+    if args.resume:
+        checkpoint_path = resolve_checkpoint(
+            experiment_dir=paths["experiment"], checkpoint=args.resume
+        )
+        state = load_checkpoint(path=checkpoint_path, device=device)
+        model.load_state_dict(state["model_state"])
+        optimizer.load_state_dict(state["optimizer"])
+        start_epoch = state["epoch"]
+        best_ssim = state.get("best_ssim", -np.inf)
+        print(
+            f"Resumed from {checkpoint_path} "
+            f"(epoch {start_epoch}, best SSIM {best_ssim:.4f})"
+        )
+
+    # experiment info file (a new one on every resume)
+    info_name = (
+        f"experiment_resume_epoch_{start_epoch}.json"
+        if args.resume
+        else "experiment.json"
+    )
+    save_experiment_info(
+        paths["experiment"],
+        file_name=info_name,
+        args=args,
+        model_config=config,
+        dataset_dir=args.dataset_dir,
+        extra={"train_pairs": len(train_set), "val_pairs": len(val_set)},
+    )
+
+    history_path = os.path.join(paths["experiment"], "history.csv")
+    for epoch in range(start_epoch + 1, args.num_epochs + 1):
+        start_time = time.time()
+        print(f"\n[{now()}] ==== Epoch {epoch}/{args.num_epochs} ====")
+        train_loss = train_one_epoch(
+            model,
+            transform,
+            train_loader,
+            optimizer,
+            criterion,
+            device=device,
+            epoch=epoch,
+        )
+
+        # figure on the first epoch, every save_every epochs and on the last
+        save_figure = (
+            epoch == 1
+            or epoch == args.num_epochs
+            or (args.save_every > 0 and epoch % args.save_every == 0)
+        )
+        figure_path = None
+        if save_figure:
+            figure_path = os.path.join(
+                paths["figures"], f"epoch_{epoch:04d}.png"
+            )
+        val = validate(
+            model,
+            transform,
+            val_loader,
+            device=device,
+            figure_path=figure_path,
+        )
+        is_best = val["val_ssim"] > best_ssim
+        best_ssim = max(best_ssim, val["val_ssim"])
+        best_flag = " | best" if is_best else ""
+        print(
+            f"train loss {train_loss:.6f} "
+            f"| val SSIM {val['val_ssim_pre']:.4f} -> {val['val_ssim']:.4f} "
+            f"| val MSE {val['val_mse_pre']:.6f} -> {val['val_mse']:.6f}"
+            f"{best_flag}"
+        )
+
+        state = {
+            "epoch": epoch,
+            "model_state": model.state_dict(),
+            "optimizer": optimizer.state_dict(),
+            "best_ssim": best_ssim,
+            "val": val,
+            "config": affine_config_for_checkpoint(config),
+            "args": vars(args),
+        }
+        save_checkpoint(
+            state,
+            checkpoint_dir=paths["checkpoints"],
+            epoch=epoch,
+            save_every=args.save_every,
+            is_best=is_best,
+        )
+        append_history(
+            history_path,
+            row={
+                "epoch": epoch,
+                "train_loss": train_loss,
+                **val,
+                "is_best": is_best,
+                "lr": optimizer.param_groups[0]["lr"],
+                "seconds": round(time.time() - start_time, 1),
+            },
+        )
+    print(f"[{now()}] Finished. Best validation SSIM: {best_ssim:.4f}")
 
 
-def save_checkpoint(state, save_dir='models', filename='checkpoint.pth.tar', max_model_num=8):
-    torch.save(state, os.path.join(save_dir, filename))
-    model_lists = natsorted(glob.glob(save_dir + '*'))
-    while len(model_lists) > max_model_num:
-        os.remove(model_lists[0])
-        model_lists = natsorted(glob.glob(save_dir + '*'))
-
-if __name__ == '__main__':
-    '''
-    GPU configuration
-    '''
-    GPU_iden = 0
-    GPU_num = torch.cuda.device_count()
-    print('Number of GPU: ' + str(GPU_num))
-    for GPU_idx in range(GPU_num):
-        GPU_name = torch.cuda.get_device_name(GPU_idx)
-        print('     GPU #' + str(GPU_idx) + ': ' + GPU_name)
-    torch.cuda.set_device(GPU_iden)
-    GPU_avai = torch.cuda.is_available()
-    print('Currently using: ' + torch.cuda.get_device_name(GPU_iden))
-    print('If the GPU is available? ' + str(GPU_avai))
+if __name__ == "__main__":
     main()

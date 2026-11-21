@@ -1,200 +1,288 @@
-import os, glob, metrics
-from torch.utils.data import DataLoader
-from data import datasets, trans
-import numpy as np
-import torch
-from torchvision import transforms
-from models.TransMorph_affine import CONFIGS as CONFIGS_TM
-import models.TransMorph_affine as TransMorph
-import torch.nn as nn
+"""Inference of a trained TransMorph-Affine on the OrCaScore NIfTI dataset.
+
+For every pair it saves, at full size (same grid and header as the pair's
+cti.nii.gz):
+    - ctai_afim.nii.gz: CTAI after the affine (bilinear);
+    - arteria_afim.nii.gz: artery after the affine (nearest), when the pair
+      has an artery;
+    - transformacao.json: matrix (mat), inverse (inv_mat) and raw parameters.
+
+And one metrics.csv with every metric before/after, with and without padding.
+"""
+
+# isort: skip_file
+# (the repository root must be on sys.path before importing orcascore)
 import argparse
-from utils.file_utils import save_pickle
-from utils.model_utils import load_model
+import json
+import os
+import sys
 
+import numpy as np
 import pandas as pd
+import torch
+from torch.utils.data import DataLoader
 
-def args_input():
-    parser = argparse.ArgumentParser(description='Affine TransMorph Affine')
-    parser.add_argument('--train_dir', type=str, default='train', help='path to train data')
-    parser.add_argument('--val_dir', type=str,  default='val', help='path to val data')
-    parser.add_argument('--save', type=str,  default='transmorph_affine', help='Save folder')
-    parser.add_argument('--epoch', type=int, default=0, help='Start epoch for training')
-    parser.add_argument('--no_save_infer', action='store_true', help="flag for not saving infered results")
-    parser.add_argument('--train_infer', action='store_true', help="eval train images. infered train images will not be saved")
-    parser.add_argument('--calc_padding', action='store_true', help="flag for calculating results without padding slices")
-    parser.add_argument('--has_artery_label', action='store_true', help="flag for using artery label")
-    parser.add_argument('--save_train', action='store_true', help="flag for saving train infered results")
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, REPO_ROOT)
+
+from orcascore.affine_model import (  # noqa: E402
+    apply_affine,
+    load_affine,
+    predict_affine,
+)
+from orcascore.dataset import (  # noqa: E402
+    PairedCTDataset,
+    padding_to_dict,
+    read_split_ids,
+)
+from orcascore.io_utils import (  # noqa: E402
+    DEFAULT_OUTPUT_DIR,
+    DEFAULT_SPLIT_DIR,
+    now,
+    resolve_checkpoint,
+    save_experiment_info,
+    save_like_reference,
+    setup_device,
+    start_logging,
+)
+from orcascore.metrics import (  # noqa: E402
+    print_summary,
+    registration_row,
+    to_numpy,
+)
+
+
+def parse_args() -> argparse.Namespace:
+    """Command line arguments."""
+    parser = argparse.ArgumentParser(
+        description="Inference of TransMorph-Affine"
+    )
+    parser.add_argument(
+        "--dataset_dir",
+        required=True,
+        help="dataset folder (dataset.csv, config.json)",
+    )
+    parser.add_argument(
+        "--name",
+        required=True,
+        help="experiment name (folder inside --output_dir)",
+    )
+    parser.add_argument(
+        "--output_dir",
+        default=DEFAULT_OUTPUT_DIR,
+        help="where experiments are saved",
+    )
+    parser.add_argument(
+        "--checkpoint",
+        default="best",
+        help="best, last, epc_<n> or a file path",
+    )
+    parser.add_argument(
+        "--sets",
+        nargs="+",
+        default=["val"],
+        choices=["val", "train"],
+        help="which splits to infer, val and/or train (default: val)",
+    )
+    parser.add_argument(
+        "--train_split",
+        default=os.path.join(DEFAULT_SPLIT_DIR, "train.csv"),
+        help="CSV with the training case_ids (column ID)",
+    )
+    parser.add_argument(
+        "--val_split",
+        default=os.path.join(DEFAULT_SPLIT_DIR, "test.csv"),
+        help="CSV with the validation/test case_ids (column ID)",
+    )
+    parser.add_argument(
+        "--no_lpips", action="store_true", help="skip LPIPS (faster)"
+    )
+    parser.add_argument(
+        "--no_save_volumes",
+        action="store_true",
+        help="only compute the metrics",
+    )
+    parser.add_argument(
+        "--num_workers", type=int, default=4, help="DataLoader workers"
+    )
+    parser.add_argument(
+        "--device", default="cuda", choices=["cuda", "cpu"], help="device"
+    )
+    parser.add_argument(
+        "--gpu", type=int, default=0, help="GPU index (cuda:N)"
+    )
     return parser.parse_args()
 
-def get_clean_data(data, padding_start, padding_end, mode='cuda'):
-    if mode == 'cuda':
-        return data[:, :, padding_start:-padding_end, :, :]
-    if mode == 'cpu':
-        return data[padding_start:-padding_end, :, :]
 
-def main():
-    args = args_input()
-    
-    train_infer = args.train_infer
-    no_save = args.no_save_infer
-    has_arteries = args.has_artery_label
-    save_train = args.save_train
+def save_pair_outputs(
+    pair_out_dir: str,
+    reference_path: str,
+    warped: torch.Tensor,
+    artery_warped,
+    output: dict,
+) -> None:
+    """Writes the registered volumes (full size, header of the CTI) and the
+    transform of one pair.
 
-    if train_infer:
-        train_dir = args.train_dir
-    val_dir = args.val_dir
-    save_dir = args.save
-    epoch = args.epoch
-    calc_padding = args.calc_padding
-    
-    model_dir = os.path.join('experiments', save_dir)
-    if not os.path.exists(model_dir):
-        raise Exception("Pasta do modelo deve existir")
-    
-    infer_dir = os.path.join(model_dir,'infer')
-    if not os.path.exists(infer_dir):
-        os.makedirs(infer_dir)
+    Args:
+        pair_out_dir: output folder of the pair.
+        reference_path: the pair's cti.nii.gz (geometry of the outputs).
+        warped: CTAI after the affine.
+        artery_warped: artery after the affine, or None.
+        output: result of predict_affine (mat, inv_mat, params).
+    """
+    os.makedirs(pair_out_dir, exist_ok=True)
+    save_like_reference(
+        to_numpy(warped),
+        reference_path=reference_path,
+        out_path=os.path.join(pair_out_dir, "ctai_afim.nii.gz"),
+    )
+    if artery_warped is not None:
+        save_like_reference(
+            to_numpy(artery_warped).astype(np.uint8),
+            reference_path=reference_path,
+            out_path=os.path.join(pair_out_dir, "arteria_afim.nii.gz"),
+        )
+    transform_info = {
+        "convention": "normalized coordinates, align_corners=False, "
+        "vector order (x, y, z)",
+        "mat": output["mat"][0].cpu().tolist(),
+        "inv_mat": output["inv_mat"][0].cpu().tolist(),
+        "params": {
+            key: value[0].cpu().tolist()
+            for key, value in output["params"].items()
+        },
+    }
+    with open(
+        os.path.join(pair_out_dir, "transformacao.json"), "w", encoding="utf-8"
+    ) as file:
+        json.dump(transform_info, file, indent=2)
 
-    # Initialize model
-    H, W, D = 64, 512, 512
-    config = CONFIGS_TM['TransMorph_Affine']
-    config.img_size = (H, W, D)
-    config.window_size = (H // 16, W // 128, D // 128)
-    
-    model = TransMorph.TransMorphAffine(config)
-    affine_trans = TransMorph.AffineTransform()#AffineTransformer((H, W, D)).cuda()
-    
-    best_model, _ = load_model(os.path.join(model_dir, f'epc_{epoch}.pth.tar'))
-    print(f'Model: epc_{epoch}.pth.tar loaded!')
-    model.load_state_dict(best_model)
-    model.cuda()
-        
 
-    train_composed = transforms.Compose([trans.NumpyType((np.float32, np.float32))])
-    val_composed = transforms.Compose([trans.MinMax_norm(ignore_label=False),
-                                       trans.PadToSize(result_slices=64, padding_mode='min_value'),
-                                       trans.NumpyType((np.float32, np.float32))])
-    
-    val_set = datasets.OrCaScoreDataSet(glob.glob(val_dir + '/*.pkl'), transforms=val_composed)
-    val_loader = DataLoader(val_set, batch_size=1, shuffle=False, num_workers=4, pin_memory=True)
-    
-    if calc_padding:
-        clean_data = []
-    
-    infer_data = []
+def infer_set(
+    model, transform, loader, set_name: str, out_dir: str, device, args
+) -> list:
+    """Infers every pair of one split; returns the metric rows."""
+    rows = []
+    lpips_device = None if args.no_lpips else str(device)
     with torch.no_grad():
-        print('========================== Infer Set ==========================')
-        for data in val_loader:
-            model.eval()
-            id_name = data['id_image'][0]
-            print('- infer ' + id_name)
-            x = data['x'].cuda()
-            y = data['y'].cuda()
-            
-            aff, scl, transl, shr = model((x, y))
-            x_trans, mat, inv_mat = affine_trans(x, aff, scl, transl, shr)
-            if has_arteries:
-                artery_lbl = data['artery'].cuda()
-                artery_trans = affine_trans.apply_affine(artery_lbl, mat, 'nearest')
-            
-            infer_data.append(metrics.calc_metrics(id_name, x, y, x_trans, y))
-            
-            padding_start = data['padding_start']
-            padding_end = data['padding_end']
-            if not no_save:
-                save_file = {
-                    'x': get_clean_data(x.detach().cpu().squeeze().numpy(), padding_start, padding_end, mode='cpu'),
-                    'x_trans': get_clean_data(x_trans.detach().cpu().squeeze().numpy(), padding_start, padding_end, mode='cpu'),
-                    'transformation': {
-                        'aff': aff.detach().cpu().squeeze().numpy(),
-                        'scl': scl.detach().cpu().squeeze().numpy(),
-                        'transl': transl.detach().cpu().squeeze().numpy(),
-                        'shr': shr.detach().cpu().squeeze().numpy()
-                    },
-                    'y': get_clean_data(y.detach().cpu().squeeze().numpy(), padding_start, padding_end, mode='cpu')
-                }
-                if has_arteries:
-                    save_file['artery'] = get_clean_data(artery_trans.detach().cpu().squeeze().numpy(), padding_start, padding_end, mode='cpu')
-                
-                save_pickle(os.path.join(infer_dir, f'{id_name}.pkl'), save_file)
-                
-            if calc_padding:
-                x_og =  get_clean_data(x, padding_start, padding_end)
-                y_og = get_clean_data(y, padding_start, padding_end)
-                
-                # Calculating metrics without padding
-                x_trans_clean = get_clean_data(x_trans, padding_start, padding_end)
-                clean_data.append(metrics.calc_metrics(id_name, x_og, y_og, x_trans_clean, y_og))
+        for batch in loader:
+            pair_id = batch["pair_id"][0]
+            print(f"[{now()}] {set_name} {pair_id}")
+            moving = batch["x"].to(device)
+            fixed = batch["y"].to(device)
+            padding = padding_to_dict(batch["padding"][0])
+            output = predict_affine(
+                model, transform, moving=moving, fixed=fixed
+            )
 
-    if calc_padding:
-        df_clean = pd.DataFrame(clean_data)
-        df_clean.to_csv(os.path.join(infer_dir, 'results_clean.csv'))
+            # artery follows the moving image (CTAI)
+            # calcification belongs to the fixed CTI
+            artery_stages, artery_warped = None, None
 
-    metrics.print_metrics(infer_data)
-    df_infer = pd.DataFrame(infer_data)
-    
-    if train_infer:
-        train_set = datasets.OrCaScoreDataSet(glob.glob(train_dir + '/*.pkl'), transforms=train_composed)
-        train_loader = DataLoader(train_set, batch_size=1, shuffle=False, num_workers=4, pin_memory=True)
-        
-        train_data = []
-        
-        with torch.no_grad():
-            print('========================== Training Set ==========================')
-            for data in train_loader:
-                model.eval()
-                id_name = data['id_image'][0]
-                print('- infer ' + id_name)
-                x = data['x'].cuda()
-                y = data['y'].cuda()
-                
-                aff, scl, transl, shr = model((x, y))
-                x_trans, mat, inv_mat = affine_trans(x, aff, scl, transl, shr)
-                
-                train_data.append(metrics.calc_metrics(id_name, x, y, x_trans, y, 'train'))
-                
-                if save_train and not no_save:
-                    padding_start = data['padding_start']
-                    padding_end = data['padding_end']
-                    
-                    if has_arteries:
-                        artery_lbl = data['artery'].cuda()
-                        artery_trans = affine_trans.apply_affine(artery_lbl, mat, 'nearest')
-                    
-                    save_file = {
-                        'x': get_clean_data(x.detach().cpu().squeeze().numpy(), padding_start, padding_end, mode='cpu'),
-                        'x_trans': get_clean_data(x_trans.detach().cpu().squeeze().numpy(), padding_start, padding_end, mode='cpu'),
-                        'transformation': {
-                            'aff': aff.detach().cpu().squeeze().numpy(),
-                            'scl': scl.detach().cpu().squeeze().numpy(),
-                            'transl': transl.detach().cpu().squeeze().numpy(),
-                            'shr': shr.detach().cpu().squeeze().numpy()
-                        },
-                        'y': get_clean_data(y.detach().cpu().squeeze().numpy(), padding_start, padding_end, mode='cpu')
-                    }
-                    if has_arteries:
-                        save_file['artery'] = get_clean_data(artery_trans.detach().cpu().squeeze().numpy(), padding_start, padding_end, mode='cpu')
-                    
-                    save_pickle(os.path.join(infer_dir, f'{id_name}.pkl'), save_file)
-                        
-                
-        metrics.print_metrics(train_data)
-        df_infer = pd.concat([df_infer, pd.DataFrame(train_data)])
-    df_infer.to_csv(os.path.join(infer_dir, 'results.csv'))
-    
+            if bool(batch["has_artery"][0]):
+                artery = batch["artery"].to(device)
+                artery_warped = apply_affine(
+                    transform, artery, output["mat"], mode="nearest"
+                )
+                artery_stages = {"pre": artery, "affine": artery_warped}
+            calcification = (
+                batch["calcification"]
+                if bool(batch["has_calcification"][0])
+                else None
+            )
 
-if __name__ == '__main__':
-    '''
-    GPU configuration
-    '''
-    GPU_iden = 0
-    GPU_num = torch.cuda.device_count()
-    print('Number of GPU: ' + str(GPU_num))
-    for GPU_idx in range(GPU_num):
-        GPU_name = torch.cuda.get_device_name(GPU_idx)
-        print('     GPU #' + str(GPU_idx) + ': ' + GPU_name)
-    torch.cuda.set_device(GPU_iden)
-    GPU_avai = torch.cuda.is_available()
-    print('Currently using: ' + torch.cuda.get_device_name(GPU_iden))
-    print('If the GPU is available? ' + str(GPU_avai))
+            row = registration_row(
+                pair_id=pair_id,
+                fixed=fixed,
+                stages={"pre": moving, "affine": output["warped"]},
+                padding=padding,
+                calcification=calcification,
+                artery_stages=artery_stages,
+                lpips_device=lpips_device,
+            )
+            rows.append(
+                {"set": set_name, "case_id": batch["case_id"][0], **row}
+            )
+
+            if not args.no_save_volumes:
+                save_pair_outputs(
+                    pair_out_dir=os.path.join(out_dir, set_name, pair_id),
+                    reference_path=os.path.join(
+                        batch["pair_dir"][0], "cti.nii.gz"
+                    ),
+                    warped=output["warped"],
+                    artery_warped=artery_warped,
+                    output=output,
+                )
+    return rows
+
+
+def main() -> None:
+    """Runs the inference on the chosen splits and writes volumes and
+    metrics."""
+    args = parse_args()
+
+    # read the experiment folder and checkpoint
+    experiment_dir = os.path.join(args.output_dir, args.name)
+    if not os.path.isdir(experiment_dir):
+        raise FileNotFoundError(f"Experiment not found: {experiment_dir}")
+    checkpoint_path = resolve_checkpoint(
+        experiment_dir=experiment_dir, checkpoint=args.checkpoint
+    )
+    checkpoint_name = os.path.basename(checkpoint_path).replace(".pth.tar", "")
+
+    # create the output folder and start logging
+    out_dir = os.path.join(experiment_dir, f"infer_{checkpoint_name}")
+    os.makedirs(out_dir, exist_ok=True)
+    log_path = start_logging(log_dir=out_dir, prefix="infer")
+    print(f"[{now()}] log: {log_path}")
+    device = setup_device(device=args.device, gpu=args.gpu)
+
+    model, transform, config = load_affine(
+        checkpoint_path=checkpoint_path, device=device
+    )
+    print(f"Checkpoint: {checkpoint_path}")
+    save_experiment_info(
+        out_dir,
+        file_name="infer.json",
+        args=args,
+        model_config=config,
+        dataset_dir=args.dataset_dir,
+        extra={"checkpoint": checkpoint_path},
+    )
+
+    splits = {"val": args.val_split, "train": args.train_split}
+    rows = []
+    for set_name in args.sets:
+        # read the pairs of this split (with labels, for the overlap metric)
+        dataset = PairedCTDataset(
+            args.dataset_dir,
+            case_ids=read_split_ids(splits[set_name]),
+            read_labels=True,
+        )
+        loader = DataLoader(
+            dataset, batch_size=1, shuffle=False, num_workers=args.num_workers
+        )
+
+        set_rows = infer_set(
+            model,
+            transform,
+            loader,
+            set_name=set_name,
+            out_dir=out_dir,
+            device=device,
+            args=args,
+        )
+        print(f"\n==== {set_name}: mean +/- std ({len(set_rows)} pairs) ====")
+        print_summary(pd.DataFrame(set_rows))
+        rows.extend(set_rows)
+
+    # save the metrics of all splits in one CSV, one line per pair
+    metrics_path = os.path.join(out_dir, "metrics.csv")
+    pd.DataFrame(rows).to_csv(metrics_path, index=False)
+    print(f"[{now()}] metrics: {metrics_path}")
+
+
+if __name__ == "__main__":
     main()
