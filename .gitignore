@@ -176,3 +176,6 @@ cython_debug/
 *.pyc
 *.png
 
+
+# training outputs (checkpoints, logs, inference volumes)
+experiments/
