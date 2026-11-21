@@ -12,9 +12,109 @@ from timm.models.layers import DropPath, trunc_normal_, to_3tuple
 from torch.distributions.normal import Normal
 import torch.nn.functional as nnf
 import numpy as np
-import models.configs_TransMorph as configs
+import math
+import warnings
+from . import configs_TransMorph as configs
 
-from torch.nn import LazyLinear
+
+def stage_resolutions(img_size, patch_size, num_layers):
+    """Spatial resolution of each Swin stage (same rule as PatchEmbed +
+    PatchMerging).
+
+    Returns:
+        list with one (D, H, W) tuple per stage.
+    """
+    patch_size = to_3tuple(patch_size)
+    res = [math.ceil(s / p) for s, p in zip(img_size, patch_size)]
+    out = [tuple(res)]
+    for _ in range(num_layers - 1):
+        res = [(r + 1) // 2 for r in res]
+        out.append(tuple(res))
+    return out
+
+
+def check_config(config):
+    """Validates img_size and window_size before building the network.
+
+    Rules:
+        - img_size must be divisible by patch_size * 2**(num_layers - 1)
+          (32 by default), otherwise PatchMerging gets odd sizes and the
+          TransMorph decoder cannot concatenate the skips (raises
+          ValueError);
+        - window_size should divide the resolution of every stage, otherwise
+          the code pads and the padding tokens enter the attention unmasked,
+          adding compute and noise (warns).
+    """
+    num_layers = len(config.depths)
+    factor = config.patch_size * 2 ** (num_layers - 1)
+    if any(s % factor for s in config.img_size):
+        raise ValueError(f'img_size {tuple(config.img_size)} must be divisible'
+                         f' by {factor} (patch_size={config.patch_size} x'
+                         f' {num_layers - 1} downsamplings).')
+    win = tuple(config.window_size[:3])
+    for i, res in enumerate(stage_resolutions(
+            config.img_size, config.patch_size, num_layers)):
+        if any(r % w for r, w in zip(res, win)):
+            warnings.warn(f'window_size {win} does not divide the resolution'
+                          f' of stage {i} {res}; padding will be used. Choose '
+                          f'a window that divides {res}.')
+
+
+def _gaussian_kernel_1d(sigma, device, dtype, truncate=4.0):
+    radius = max(1, int(math.ceil(truncate * sigma)))
+    t = torch.arange(-radius, radius + 1, device=device, dtype=dtype)
+    k = torch.exp(-0.5 * (t / sigma) ** 2)
+    return k / k.sum()
+
+
+def resize_antialias(x, size):
+    """Resamples x to `size` without aliasing and without shifting the
+    geometry.
+
+    Steps:
+        1. Anti-aliasing: each reduced axis (factor f = n_in / n_out > 1)
+           gets a 1D Gaussian filter with sigma = (f - 1) / 2 voxels (same
+           rule as skimage.transform.resize(anti_aliasing=True)), with
+           replicated borders. Without it, a ~8x reduction in XY would drop
+           7 of every 8 voxels instead of averaging them, with any
+           interpolator (B-spline included).
+        2. Trilinear interpolation with align_corners=False: the physical
+           extent of the volume (voxel borders) and its center are
+           preserved. It is the same convention as the
+           affine_grid/grid_sample of AffineTransform, so a matrix estimated
+           at the reduced resolution is valid, unchanged, at full resolution.
+
+    Axes that are not reduced (f <= 1) are not filtered. The output stays
+    within the input range (filter and trilinear are weighted averages), so
+    no clamp is needed.
+
+    Args:
+        x: (B, C, D, H, W) tensor.
+        size: output (D, H, W).
+
+    Returns:
+        (B, C, *size) tensor.
+    """
+    in_size = tuple(x.shape[2:])
+    size = tuple(size)
+    if in_size == size:
+        return x
+    B, C = x.shape[:2]
+    x = x.reshape(B * C, 1, *in_size)
+    for axis, (n_in, n_out) in enumerate(zip(in_size, size)):
+        f = n_in / n_out
+        if f <= 1:
+            continue
+        k = _gaussian_kernel_1d((f - 1) / 2, x.device, x.dtype)
+        r = (k.numel() - 1) // 2
+        k_shape = [1, 1, 1, 1, 1]
+        k_shape[2 + axis] = k.numel()
+        # F.pad order: (W_left, W_right, H_left, H_right, D_left, D_right)
+        pad = [0] * 6
+        pad[2 * (2 - axis)] = pad[2 * (2 - axis) + 1] = r
+        x = nnf.conv3d(nnf.pad(x, pad, mode='replicate'), k.view(k_shape))
+    x = nnf.interpolate(x, size=size, mode='trilinear', align_corners=False)
+    return x.reshape(B, C, *size)
 
 class Mlp(nn.Module):
     def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.GELU, drop=0.):
@@ -236,7 +336,8 @@ class SwinTransformerBlock(nn.Module):
         else:
             x = shifted_x
 
-        if pad_r > 0 or pad_b > 0:
+        # remove padding
+        if pad_r > 0 or pad_b > 0 or pad_h > 0:
             x = x[:, :H, :W, :T, :].contiguous()
 
         x = x.view(B, H * W * T, C)
@@ -847,19 +948,62 @@ class AffineTransform(nn.Module):
         shear_zx = shear[:, 4]
         shear_zy = shear[:, 5]
 
-        rot_mat_x = torch.stack([torch.stack([torch.ones_like(theta_x), torch.zeros_like(theta_x), torch.zeros_like(theta_x)], dim=1), torch.stack([torch.zeros_like(theta_x), torch.cos(theta_x), -torch.sin(theta_x)], dim=1), torch.stack([torch.zeros_like(theta_x), torch.sin(theta_x), torch.cos(theta_x)], dim=1)], dim=2).cuda()
-        rot_mat_y = torch.stack([torch.stack([torch.cos(theta_y), torch.zeros_like(theta_y), torch.sin(theta_y)], dim=1), torch.stack([torch.zeros_like(theta_y), torch.ones_like(theta_x), torch.zeros_like(theta_x)], dim=1), torch.stack([-torch.sin(theta_y), torch.zeros_like(theta_y), torch.cos(theta_y)], dim=1)], dim=2).cuda()
-        rot_mat_z = torch.stack([torch.stack([torch.cos(theta_z), -torch.sin(theta_z), torch.zeros_like(theta_y)], dim=1), torch.stack([torch.sin(theta_z), torch.cos(theta_z), torch.zeros_like(theta_y)], dim=1), torch.stack([torch.zeros_like(theta_y), torch.zeros_like(theta_y), torch.ones_like(theta_x)], dim=1)], dim=2).cuda()
+        rot_mat_x = torch.stack([torch.stack([torch.ones_like(theta_x),
+                                              torch.zeros_like(theta_x),
+                                              torch.zeros_like(theta_x)],
+                                             dim=1),
+                                 torch.stack([torch.zeros_like(theta_x),
+                                              torch.cos(theta_x),
+                                              -torch.sin(theta_x)],
+                                             dim=1),
+                                 torch.stack([torch.zeros_like(theta_x),
+                                              torch.sin(theta_x),
+                                              torch.cos(theta_x)],
+                                             dim=1)],
+                                dim=2)
+        rot_mat_y = torch.stack([torch.stack([torch.cos(theta_y),
+                                              torch.zeros_like(theta_y),
+                                              torch.sin(theta_y)],
+                                             dim=1),
+                                 torch.stack([torch.zeros_like(theta_y),
+                                              torch.ones_like(theta_x),
+                                              torch.zeros_like(theta_x)],
+                                             dim=1),
+                                 torch.stack([-torch.sin(theta_y),
+                                              torch.zeros_like(theta_y),
+                                              torch.cos(theta_y)],
+                                             dim=1)],
+                                dim=2)
+        rot_mat_z = torch.stack([torch.stack([torch.cos(theta_z),
+                                              -torch.sin(theta_z),
+                                              torch.zeros_like(theta_y)],
+                                             dim=1),
+                                 torch.stack([torch.sin(theta_z),
+                                              torch.cos(theta_z),
+                                              torch.zeros_like(theta_y)],
+                                             dim=1),
+                                 torch.stack([torch.zeros_like(theta_y),
+                                              torch.zeros_like(theta_y),
+                                              torch.ones_like(theta_x)],
+                                             dim=1)],
+                                dim=2)
         scale_mat = torch.stack(
             [torch.stack([scale_x, torch.zeros_like(theta_z), torch.zeros_like(theta_y)], dim=1),
-             torch.stack([torch.zeros_like(theta_z), scale_y, torch.zeros_like(theta_y)], dim=1),
-             torch.stack([torch.zeros_like(theta_y), torch.zeros_like(theta_y), scale_z], dim=1)], dim=2).cuda()
+             torch.stack([torch.zeros_like(theta_z), scale_y,
+                         torch.zeros_like(theta_y)], dim=1),
+             torch.stack([torch.zeros_like(theta_y), torch.zeros_like(theta_y), scale_z], dim=1)], dim=2)
         shear_mat = torch.stack(
             [torch.stack([torch.ones_like(theta_x), torch.tan(shear_xy), torch.tan(shear_xz)], dim=1),
-             torch.stack([torch.tan(shear_yx), torch.ones_like(theta_x), torch.tan(shear_yz)], dim=1),
-             torch.stack([torch.tan(shear_zx), torch.tan(shear_zy), torch.ones_like(theta_x)], dim=1)], dim=2).cuda()
-        trans = torch.stack([trans_x, trans_y, trans_z], dim=1).unsqueeze(dim=2)
-        mat = torch.bmm(shear_mat, torch.bmm(scale_mat, torch.bmm(rot_mat_z, torch.matmul(rot_mat_y, rot_mat_x))))
+             torch.stack([torch.tan(shear_yx), torch.ones_like(
+                 theta_x), torch.tan(shear_yz)], dim=1),
+             torch.stack([torch.tan(shear_zx), torch.tan(shear_zy), torch.ones_like(theta_x)], dim=1)], dim=2)
+        trans = torch.stack([trans_x, trans_y, trans_z],
+                            dim=1).unsqueeze(dim=2)
+        mat = torch.bmm(
+            shear_mat, torch.bmm(
+                scale_mat, torch.bmm(
+                    rot_mat_z, torch.matmul(
+                        rot_mat_y, rot_mat_x))))
         inv_mat = torch.inverse(mat)
         mat = torch.cat([mat, trans], dim=-1)
         inv_trans = torch.bmm(-inv_mat, trans)
@@ -867,11 +1011,23 @@ class AffineTransform(nn.Module):
         grid = nnf.affine_grid(mat, [src.shape[0], 3, src.shape[2], src.shape[3], src.shape[4]], align_corners=False)
         return nnf.grid_sample(src, grid, align_corners=False, mode=self.mode), mat, inv_mat
 
+
 class TransMorphAffine(nn.Module):
     def __init__(self, config):
         super(TransMorphAffine, self).__init__()
+        check_config(config)
         embed_dim = config.embed_dim
         self.img_size = config.img_size
+        # Head input = flattened features of the last stage
+        #   C_final * D' * H' * W'.
+        # The original used embed_dim * 8 * prod(window_size), which only
+        # matches because in the paper (160^3, patch 4, 3 downsamplings) the
+        # last stage is 5x5x5 = window_size.
+        num_layers = len(config.depths)
+        final_res = stage_resolutions(
+            config.img_size, config.patch_size, num_layers)[-1]
+        final_chans = embed_dim * 2 ** (num_layers - 1)
+        head_in = final_chans * int(np.prod(final_res))
         self.transformer = SwinTransformer(patch_size=config.patch_size,
                                            in_chans=config.in_chans,
                                            embed_dim=config.embed_dim,
@@ -890,7 +1046,7 @@ class TransMorphAffine(nn.Module):
                                            pat_merg_rf=config.pat_merg_rf,
                                            )
         self.aff_mlp = nn.Sequential()
-        aff_head = LazyLinear(100)
+        aff_head = nn.Linear(head_in, 100)
         self.aff_mlp.append(aff_head)
         relu_aff = nn.LeakyReLU()
         self.aff_mlp.append(relu_aff)
@@ -900,7 +1056,7 @@ class TransMorphAffine(nn.Module):
         self.aff_mlp.append(aff_head_f)
 
         self.scl_mlp = nn.Sequential()
-        scl_head = LazyLinear(100)
+        scl_head = nn.Linear(head_in, 100)
         self.scl_mlp.append(scl_head)
         relu_scl = nn.LeakyReLU()
         self.scl_mlp.append(relu_scl)
@@ -910,7 +1066,7 @@ class TransMorphAffine(nn.Module):
         self.scl_mlp.append(scl_head_f)
 
         self.trans_mlp = nn.Sequential()
-        trans_head = LazyLinear(100)
+        trans_head = nn.Linear(head_in, 100)
         self.trans_mlp.append(trans_head)
         relu_trans = nn.LeakyReLU()
         self.trans_mlp.append(relu_trans)
@@ -920,7 +1076,7 @@ class TransMorphAffine(nn.Module):
         self.trans_mlp.append(trans_head_f)
 
         self.shear_mlp = nn.Sequential()
-        shear_head = LazyLinear(100)
+        shear_head = nn.Linear(head_in, 100)
         self.shear_mlp.append(shear_head)
         relu_shear = nn.LeakyReLU()
         self.shear_mlp.append(relu_shear)
@@ -928,7 +1084,7 @@ class TransMorphAffine(nn.Module):
         shear_head_f.weight = nn.Parameter(Normal(0, 1e-2).sample(shear_head_f.weight.shape))
         shear_head_f.bias = nn.Parameter(Normal(0, 1e-4).sample(shear_head_f.bias.shape))
         self.shear_mlp.append(shear_head_f)
-        self.inst_norm = nn.InstanceNorm3d(embed_dim * 8)
+        self.inst_norm = nn.InstanceNorm3d(final_chans)
 
     def softplus(self, x):  # Softplus
         return torch.log(1 + torch.exp(x))
@@ -936,6 +1092,10 @@ class TransMorphAffine(nn.Module):
     def forward(self, inputs):
         mov, fix = inputs
         x_cat = torch.cat((mov, fix), dim=1)
+        # The network sees the volumes at img_size, not full_size; the
+        # returned transform is in normalized coordinates and is applied
+        # outside, at full resolution.
+        x_cat = resize_antialias(x_cat, self.img_size)
         out = self.transformer(x_cat)  # (B, n_patch, hidden)
         out = self.inst_norm(out[-1])
         x5 = torch.flatten(out, start_dim=1)
