@@ -177,5 +177,9 @@ cython_debug/
 *.png
 
 
-# training outputs (checkpoints, logs, inference volumes)
-experiments/
+# experiments: version only the tables and the run info (csv/json);
+# checkpoints, volumes, figures and logs stay out
+experiments/**
+!experiments/**/
+!experiments/**/*.csv
+!experiments/**/*.json
