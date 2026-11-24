@@ -1,0 +1,130 @@
+{
+  "date": "2026-11-23 10:38:06",
+  "command": "train_TransMorph_affine.py --dataset_dir /data04/home/dac/egbarbosa/group_files/dados/dataset_mix_comum --name mix_comum_affine --gpu 0",
+  "args": {
+    "dataset_dir": "/data04/home/dac/egbarbosa/group_files/dados/dataset_mix_comum",
+    "name": "mix_comum_affine",
+    "output_dir": "/data04/home/dac/group_files/TransMorph_Transformer_for_Medical_Image_Registration/experiments",
+    "train_split": "/data04/home/dac/group_files/TransMorph_Transformer_for_Medical_Image_Registration/splits/orcascore/train.csv",
+    "val_split": "/data04/home/dac/group_files/TransMorph_Transformer_for_Medical_Image_Registration/splits/orcascore/test.csv",
+    "lr": 0.0001,
+    "batch_size": 1,
+    "num_epochs": 500,
+    "save_every": 10,
+    "resume": null,
+    "no_flip": false,
+    "num_workers": 4,
+    "seed": null,
+    "device": "cuda",
+    "gpu": 0
+  },
+  "model_config": {
+    "ape": false,
+    "depths": [
+      1,
+      1,
+      2,
+      2
+    ],
+    "drop_path_rate": 0.3,
+    "drop_rate": 0,
+    "embed_dim": 12,
+    "full_size": [
+      64,
+      800,
+      800
+    ],
+    "if_convskip": true,
+    "if_transskip": true,
+    "img_size": [
+      64,
+      96,
+      96
+    ],
+    "in_chans": 2,
+    "mlp_ratio": 4,
+    "num_heads": [
+      1,
+      1,
+      2,
+      2
+    ],
+    "out_chan": 3,
+    "out_indices": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "pat_merg_rf": 4,
+    "patch_norm": true,
+    "patch_size": 4,
+    "qkv_bias": false,
+    "reg_head_chan": 16,
+    "rpe": true,
+    "spe": false,
+    "use_checkpoint": false,
+    "window_size": [
+      2,
+      3,
+      3
+    ]
+  },
+  "git": {
+    "commit": "bec803b462e47245e2a37426bbf91ddfbc7d1450",
+    "uncommitted_changes": true
+  },
+  "environment": {
+    "python": "3.11.18",
+    "torch": "2.0.1+cu118",
+    "cuda": "11.8",
+    "gpu": "Quadro RTX 5000",
+    "host": "curupira"
+  },
+  "dataset_dir": "/data04/home/dac/egbarbosa/group_files/dados/dataset_mix_comum",
+  "dataset_config": {
+    "data": "2026-11-22T22:06:54",
+    "opcoes": {
+      "modo": "mix",
+      "espacamento": "comum",
+      "tamanho": null,
+      "detect_fov": true,
+      "saida": "D:\\workspace_data\\tcc\\orcascore\\transmorph\\dataset_mix_comum",
+      "ids": null,
+      "refazer": false,
+      "dados_dir": "D:\\workspace_data",
+      "casos_csv": "C:\\Users\\evera\\Documents\\workspace\\mestrado\\Alinhamento_Axial_LPIPS\\TC_SCAN_ID.csv",
+      "cache_dir": "C:\\Users\\evera\\Documents\\workspace\\mestrado\\Alinhamento_Axial_LPIPS\\output\\pipeline_dataset_alinhamento",
+      "orientacao_arteria": null
+    },
+    "config": {
+      "hu_min": -1000,
+      "hu_max": 700,
+      "top_k_list": [
+        1,
+        3,
+        5
+      ],
+      "range_multiplier": 5.0,
+      "search_radius": 35,
+      "search_stride": 2,
+      "detect_fov": true,
+      "label_orientations": {}
+    },
+    "tamanho_final": [
+      64,
+      800,
+      800
+    ],
+    "spacing_alvo": [
+      2.5,
+      0.314453,
+      0.314453
+    ],
+    "casos_com_erro": []
+  },
+  "extra": {
+    "train_pairs": 128,
+    "val_pairs": 16
+  }
+}
