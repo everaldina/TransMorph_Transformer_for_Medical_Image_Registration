@@ -1,0 +1,89 @@
+{
+  "date": "2026-11-24 14:18:20",
+  "command": "infer_TransMorph_affine.py --dataset_dir /data04/home/dac/egbarbosa/group_files/dados/dataset_cytran_comu --name cytran_comum_affine --gpu 1 --checkpoint best --sets val train",
+  "args": {
+    "dataset_dir": "/data04/home/dac/egbarbosa/group_files/dados/dataset_cytran_comu",
+    "name": "cytran_comum_affine",
+    "output_dir": "/data04/home/dac/group_files/TransMorph_Transformer_for_Medical_Image_Registration/experiments",
+    "checkpoint": "best",
+    "sets": [
+      "val",
+      "train"
+    ],
+    "train_split": "/data04/home/dac/group_files/TransMorph_Transformer_for_Medical_Image_Registration/splits/orcascore/train.csv",
+    "val_split": "/data04/home/dac/group_files/TransMorph_Transformer_for_Medical_Image_Registration/splits/orcascore/test.csv",
+    "no_lpips": false,
+    "no_save_volumes": false,
+    "num_workers": 4,
+    "device": "cuda",
+    "gpu": 1
+  },
+  "model_config": {
+    "ape": false,
+    "depths": [
+      1,
+      1,
+      2,
+      2
+    ],
+    "drop_path_rate": 0.3,
+    "drop_rate": 0,
+    "embed_dim": 12,
+    "full_size": [
+      64,
+      800,
+      800
+    ],
+    "if_convskip": true,
+    "if_transskip": true,
+    "img_size": [
+      64,
+      96,
+      96
+    ],
+    "in_chans": 2,
+    "mlp_ratio": 4,
+    "num_heads": [
+      1,
+      1,
+      2,
+      2
+    ],
+    "out_chan": 3,
+    "out_indices": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "pat_merg_rf": 4,
+    "patch_norm": true,
+    "patch_size": 4,
+    "qkv_bias": false,
+    "reg_head_chan": 16,
+    "rpe": true,
+    "spe": false,
+    "use_checkpoint": false,
+    "window_size": [
+      2,
+      3,
+      3
+    ]
+  },
+  "git": {
+    "commit": "cd723cf83ef33dbdceb500c1e479c78b10b3a7ac",
+    "uncommitted_changes": true
+  },
+  "environment": {
+    "python": "3.11.18",
+    "torch": "2.0.1+cu118",
+    "cuda": "11.8",
+    "gpu": "Quadro RTX 5000",
+    "host": "curupira"
+  },
+  "dataset_dir": "/data04/home/dac/egbarbosa/group_files/dados/dataset_cytran_comu",
+  "dataset_config": null,
+  "extra": {
+    "checkpoint": "/data04/home/dac/group_files/TransMorph_Transformer_for_Medical_Image_Registration/experiments/cytran_comum_affine/checkpoints/best.pth.tar"
+  }
+}
